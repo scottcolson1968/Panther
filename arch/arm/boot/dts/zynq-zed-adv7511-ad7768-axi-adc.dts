@@ -1,0 +1,474 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Analog Devices AD7768
+ * https://wiki.analog.com/resources/tools-software/linux-drivers/iio-adc/ad7768
+ *
+ * hdl_project: <ad7768evb/zed>
+ * board_revision: <>
+ *
+ * Copyright (C) 2020 Analog Devices Inc.
+ */
+/dts-v1/;
+
+#include "zynq-zed.dtsi"
+#include "zynq-zed-adv7511.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	vref: regulator-vref {
+		compatible = "regulator-fixed";
+		regulator-name = "fixed-supply";
+		regulator-min-microvolt = <4096000>;
+		regulator-max-microvolt = <4096000>;
+		regulator-always-on;
+	};
+	
+	vdac: regulator-vdac {
+		compatible = "regulator-fixed";
+		regulator-name = "dac-supply";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-always-on;
+	};
+
+	clocks {
+		ad7768_mclk: clock@0 {
+			#clock-cells = <0>;
+			compatible = "fixed-clock";
+			clock-frequency = <33554432>;
+		};
+	};
+};
+
+&fpga_axi {
+	rx_dma: rx-dmac@0x7c480000 {
+		compatible = "adi,axi-dmac-1.00.a";
+		reg = <0x7c480000 0x10000>;
+		#dma-cells = <1>;
+		interrupts = <0 54 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&clkc 16>;
+
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <512>;
+				adi,source-bus-type = <2>;
+				adi,destination-bus-width = <64>;
+				adi,destination-bus-type = <0>;
+			};
+		};
+	};
+	
+	tx_dma: tx-dmac@42200000 {
+		compatible = "adi,axi-dmac-1.00.a";
+		reg = <0x42200000 0x40000>;
+		#dma-cells = <1>;
+		interrupts = <0 53 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&clkc 15>;
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <64>;
+				adi,source-bus-type = <0>;
+				adi,destination-bus-width = <32>;
+				adi,destination-bus-type = <2>;
+		//		adi,cyclic;
+			};
+		};
+	};
+	
+	cola_dma: cola-dmac@44a30000 {
+		compatible = "adi,axi-dmac-1.00.a";
+		reg = <0x44a30000 0x10000>;
+		#dma-cells = <1>;
+		interrupts = <0 36 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&clkc 15>;
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <64>;
+				adi,source-bus-type = <0>;
+				adi,destination-bus-width = <32>;
+				adi,destination-bus-type = <2>;
+		//		adi,cyclic;
+			};
+		};
+	};
+	
+	axi_adc_ad7768: cf_axi_adc@43c00000 {
+		compatible = "adi,axi-adc-10.0.a";
+		reg = <0x43c00000 0x10000>;
+		dmas = <&rx_dma 0>;
+		dma-names = "rx";
+		spibus-connected = <&ad7768>;
+	};
+	
+	IIC: i2c@40800000 {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		compatible = "xlnx,xps-iic-2.00.a";
+		clocks = <&clkc 15>;
+		reg = <0x40800000 0x10000>;
+		interrupt-parent = <&intc>;
+		interrupts = <0 34 IRQ_TYPE_LEVEL_HIGH>;		
+		pca9534_ch0: pca9534@20 {
+			compatible = "nxp,pca9534";
+			reg = <0x20>;
+			gpio-controller;
+			#gpio-cells = <2>;	
+			incoupling0-gpios = <&pca9534_ch0 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch0 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch0 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch0 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch0 0x4 GPIO_ACTIVE_HIGH>;			
+		};
+		pca9534_ch1: pca9534@21 {
+			compatible = "nxp,pca9534";
+			gpio-controller;
+			reg = <0x21>;
+			#gpio-cells = <2>;		
+			incoupling1-gpios = <&pca9534_ch1 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch1 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch1 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch1 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch1 0x4 GPIO_ACTIVE_HIGH>;
+		};
+		pca9534_ch2: pca9534@22 {
+			compatible = "nxp,pca9534";
+			reg = <0x22>;
+			gpio-controller;
+			#gpio-cells = <2>;	
+			incoupling2-gpios = <&pca9534_ch2 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch2 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch2 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch2 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch2 0x4 GPIO_ACTIVE_HIGH>;			
+		};
+		pca9534_ch3: pca9534@23 {
+			compatible = "nxp,pca9534";
+			gpio-controller;
+			reg = <0x23>;
+			#gpio-cells = <2>;		
+			incoupling3-gpios = <&pca9534_ch3 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch3 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch3 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch3 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch3 0x4 GPIO_ACTIVE_HIGH>;
+		};
+		pca9534_ch4: pca9534@24 {
+			compatible = "nxp,pca9534";
+			reg = <0x24>;
+			gpio-controller;
+			#gpio-cells = <2>;	
+			incoupling4-gpios = <&pca9534_ch4 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch4 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch4 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch4 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch4 0x4 GPIO_ACTIVE_HIGH>;			
+		};
+		pca9534_ch5: pca9534@25 {
+			compatible = "nxp,pca9534";
+			gpio-controller;
+			reg = <0x25>;
+			#gpio-cells = <2>;		
+			incoupling5-gpios = <&pca9534_ch5 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch5 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch5 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch5 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch5 0x4 GPIO_ACTIVE_HIGH>;
+		};
+		pca9534_ch6: pca9534@26 {
+			compatible = "nxp,pca9534";
+			reg = <0x26>;
+			gpio-controller;
+			#gpio-cells = <2>;	
+			incoupling6-gpios = <&pca9534_ch6 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch6 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch6 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch6 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch6 0x4 GPIO_ACTIVE_HIGH>;			
+		};
+		pca9534_ch7: pca9534@27 {
+			compatible = "nxp,pca9534";
+			gpio-controller;
+			reg = <0x27>;
+			#gpio-cells = <2>;		
+			incoupling7-gpios = <&pca9534_ch7 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch7 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch7 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch7 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_ch7 0x4 GPIO_ACTIVE_HIGH>;
+		};
+		pca9534_drv: pca9534@39 {
+			compatible = "nxp,pca9534";			
+			reg = <0x39>;
+			gpio-controller;
+			#gpio-cells = <2>;			
+			outcoupling-gpios = <&pca9534_drv 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_drv 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_drv 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_drv 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_drv 0x4 GPIO_ACTIVE_HIGH>,
+								<&pca9534_drv 0x5 GPIO_ACTIVE_HIGH>;									
+		};
+		pca9534_sync: pca9534@3a {
+			compatible = "nxp,pca9534";			
+			reg = <0x3a>;
+			gpio-controller;
+			#gpio-cells = <2>;	
+			synchgpio-gpios = <&pca9534_sync 0x0 GPIO_ACTIVE_HIGH>,
+								<&pca9534_sync 0x1 GPIO_ACTIVE_HIGH>,
+								<&pca9534_sync 0x2 GPIO_ACTIVE_HIGH>,
+								<&pca9534_sync 0x3 GPIO_ACTIVE_HIGH>,
+								<&pca9534_sync 0x4 GPIO_ACTIVE_HIGH>,
+								<&pca9534_sync 0x5 GPIO_ACTIVE_HIGH>,
+								<&pca9534_sync 0x6 GPIO_ACTIVE_HIGH>,
+								<&pca9534_sync 0x7 GPIO_ACTIVE_HIGH>;		/* for now	*/			
+		};
+	};	
+	
+	axi_gpio_teds: gpio@40090000 {
+		#gpio-cells = <2>;
+		clock-names = "s_axi_aclk";
+		clocks = <&clkc 15>;
+		compatible = "xlnx,xps-gpio-1.00.a";
+		gpio-controller;
+		reg = <0x40090000 0x10000>;
+		xlnx,all-inputs = <0x0>;
+		xlnx,all-outputs = <0x0>;
+		xlnx,dout-default = <0x0>;
+		xlnx,gpio-width = <0x1>;
+		xlnx,interrupt-present = <0x0>;
+		xlnx,is-dual = <0x0>;
+		xlnx,tri-default = <0x0>;
+		
+	};
+	w1: onewire@0 {
+			compatible = "w1-gpio";
+			gpios = <&axi_gpio_teds 0 0x0>;
+		/*	linux,open-drain;*/
+			status = "okay";
+		};	
+		
+	DriveScale_1: DriveScale@40000000 {
+	 	/* This is a place holder node for a custom IP, user may need to update the entries */
+		clock-names = "ap_clk";
+		clocks = <&clkc 15>;
+		compatible = "dmem-uio";
+		reg = <0x40000000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x6>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	ADCcal_constants0: adccal_constants@40010000 {
+	 	/* channel 1 adc cal factors */
+		clock-names = "ap_clk";
+		clocks = <&clkc 16>;
+		compatible = "dmem-uio";
+		reg = <0x40010000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x8>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	ADCcal_constants1: adccal_constants@40020000 {
+	 	/* channel 2 adc cal factors */
+		clock-names = "ap_clk";
+		clocks = <&clkc 16>;
+		compatible = "dmem-uio";
+		reg = <0x40020000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x8>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	ADCcal_constants2: adccal_constants@40030000 {
+	 	/* channel 3 adc cal factors */
+		clock-names = "ap_clk";
+		clocks = <&clkc 16>;
+		compatible = "dmem-uio";
+		reg = <0x40030000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x8>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	ADCcal_constants3: adccal_constants@40040000 {
+	 	/* channel 4 adc cal factors */
+		clock-names = "ap_clk";
+		clocks = <&clkc 16>;
+		compatible = "dmem-uio";
+		reg = <0x40040000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x8>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	ADCcal_constants4: adccal_constants@40050000 {
+	 	/* channel 5 adc cal factors */
+		clock-names = "ap_clk";
+		clocks = <&clkc 16>;
+		compatible = "dmem-uio";
+		reg = <0x40050000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x8>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	ADCcal_constants5: adccal_constants@40060000 {
+	 	/* channel 6 adc cal factors */
+		clock-names = "ap_clk";
+		clocks = <&clkc 16>;
+		compatible = "dmem-uio";
+		reg = <0x40060000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x8>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	ADCcal_constants6: adccal_constants@40070000 {
+	 	/* channel 7 adc cal factors */
+		clock-names = "ap_clk";
+		clocks = <&clkc 16>;
+		compatible = "dmem-uio";
+		reg = <0x40070000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x8>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	ADCcal_constants7: adccal_constants@40080000 {
+	 	/* channel 8 adc cal factors */
+		clock-names = "ap_clk";
+		clocks = <&clkc 16>;
+		compatible = "dmem-uio";
+		reg = <0x40080000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x8>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	Synch0: Synch@400a0000 {
+	 	/* This is a place holder node for a custom IP, user may need to update the entries */
+		clock-names = "ap_clk";
+		clocks = <&clkc 15>;
+		compatible = "dmem-uio";
+		reg = <0x400a0000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x6>;
+		xlnx,s-axi-control-data-width = <0x20>; 
+	};
+/*	
+	axi_gpio_0: gpio@400b0000 {
+		#gpio-cells = <2>;
+		//compatible = "xlnx,xps-gpio-1.00.a";
+		compatible = "generic-uio";
+		gpio-controller;
+	//	interrupt-controller;
+//		interrupt-parent = <&intc>;
+	//	interrupts = <0 56 IRQ_TYPE_LEVEL_HIGH>; 
+	//	interrupt-names = "ip2intc_irpt";
+		reg = <0x400b0000 0x10000>;
+		xlnx,all-inputs = <0x1>;
+		xlnx,all-inputs-2 = <0x1>;
+		xlnx,all-outputs = <0x0>;
+		xlnx,all-outputs-2 = <0x0>;
+		xlnx,dout-default = <0x00000000>;
+		xlnx,dout-default-2 = <0x00000000>;
+		xlnx,gpio-width = <0x1>;
+		xlnx,gpio2-width = <0x1>;
+		xlnx,interrupt-present = <0x0>;
+		xlnx,is-dual = <0x0>;
+		xlnx,tri-default = <0xFFFFFFFF>;
+		xlnx,tri-default-2 = <0xFFFFFFFF>;
+		
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		interrupt-parent = <&axi_gpio_0>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		autorepeat;
+		button {
+			label = "Button";			
+			interrupts = <0 IRQ_TYPE_EDGE_BOTH>;
+			linux,code = <1>;
+			gpio-key,wakeup;
+			gpios = <&axi_gpio_0 0 0>; 
+		};
+	};
+*/		
+	axi_spi_engine_0: spi@42000000 {
+		compatible = "adi,axi-spi-engine-1.00.a";
+		reg = <0x42000000 0x40000>;
+		interrupt-parent = <&intc>;
+		interrupts = <0 52 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&clkc 15 &clkc 15>;
+		clock-names = "s_axi_aclk", "spi_clk";
+		num-cs = <1>;
+
+		#address-cells = <0x1>;
+		#size-cells = <0x0>;
+		ad5791: dac@0 {
+			compatible = "adi,ad5791";
+			reg = <0>;
+			spi-max-frequency = <25000000>;
+	//		spi-cpha;
+			spi-cpol;
+			vss-supply = <&vdac>; /* probably needs to be vdac 5.0V */
+			vdd-supply = <&vref>;	
+			dmas = <&tx_dma 0>;
+			dma-names = "tx";	
+		
+		};		
+	};
+	
+	axi_spi_engine_1: spi@44a40000 {
+		compatible = "adi,axi-spi-engine-1.00.a";
+		reg = <0x44a40000 0x10000>;
+		interrupt-parent = <&intc>;
+		interrupts = <0 35 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&clkc 15 &clkc 15>;
+		clock-names = "s_axi_aclk", "spi_clk";
+		num-cs = <1>;
+
+		#address-cells = <0x1>;
+		#size-cells = <0x0>;	
+		
+		ad5541a: cola@0 {
+			compatible = "adi,ad5541a";
+			reg = <0>;
+			spi-max-frequency = <25000000>; 
+			spi-cpha;
+			spi-cpol;
+			vcc-supply = <&vref>;	
+			dmas = <&cola_dma 0>;
+			dma-names = "tx";		
+		};
+	};
+};
+
+
+
+&spi0 {
+	status = "okay";
+
+	ad7768: adc@0 {
+		compatible = "adi,ad7768";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+		interrupt-parent = <&intc>;
+		interrupts = <0 56 IRQ_TYPE_LEVEL_LOW>;
+		vref-supply = <&vref>;
+		reset-gpios = <&gpio0 86 GPIO_ACTIVE_LOW>;
+	/*	start-gpios = <&gpio0 87 GPIO_ACTIVE_HIGH>; uncomment for eval board */
+		clocks = <&ad7768_mclk>;
+		clock-names = "mclk";
+		adi,data-lines = <8>;		
+	};
+};
+
+&usb0 {
+	dr_mode = "otg";
+};
