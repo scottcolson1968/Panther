@@ -21,18 +21,14 @@ int XDrivescale_CfgInitialize(XDrivescale *InstancePtr, XDrivescale_Config *Conf
 }
 #endif
 
-void XDrivescale_WriteReg(int BaseAddress, int RegOffset, int Data) {
-    void *io = ioremap(BaseAddress+RegOffset, 4); 
+void XDrivescale_WriteReg(void __iomem *base, int RegOffset, u32 Data) {
+    iowrite32(Data, base + RegOffset);
  //   printk(KERN_INFO "write adc base 0x%x reg 0x%x data 0x%x\n",BaseAddress,RegOffset,Data);
-	writel(Data, io); 
-	iounmap(io);
 }
 
-int XDrivescale_ReadReg(int BaseAddress, int RegOffset) {
-   	void *io = ioremap(BaseAddress+RegOffset, 4); 
- 	int Data = readl(io); 
-	iounmap(io); 
-	return Data;
+u32 XDrivescale_ReadReg(void __iomem *base, int RegOffset) {
+    return ioread32(base + RegOffset);
+
 }
 
 void XDrivescale_Set_ScaleValue(XDrivescale *InstancePtr, u32 Data) {
@@ -86,6 +82,40 @@ u32 XDrivescale_Get_samp_index(XDrivescale *InstancePtr) {
     return Data;
 }
 
+void XDrivescale_Set_fClipValue(XDrivescale *InstancePtr, u32 Data) {
+    Xil_AssertVoid(InstancePtr != NULL);
+    Xil_AssertVoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
+   
+    XDrivescale_WriteReg(InstancePtr->Control_BaseAddress, XDRIVESCALE_CONTROL_ADDR_FCLIPVALUE_DATA, Data);
+}
+
+u32 XDrivescale_Get_fClipValue(XDrivescale *InstancePtr) {
+    u32 Data;
+
+    Xil_AssertNonvoid(InstancePtr != NULL);
+    Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
+
+    Data = XDrivescale_ReadReg(InstancePtr->Control_BaseAddress, XDRIVESCALE_CONTROL_ADDR_FCLIPVALUE_DATA);
+    return Data;
+}
+
+void XDrivescale_Set_bRampDown(XDrivescale *InstancePtr, u32 Data) {
+    Xil_AssertVoid(InstancePtr != NULL);
+    Xil_AssertVoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
+
+    XDrivescale_WriteReg(InstancePtr->Control_BaseAddress, XDRIVESCALE_CONTROL_ADDR_BRAMPDOWN_DATA, Data);
+}
+
+u32 XDrivescale_Get_bRampDown(XDrivescale *InstancePtr) {
+    u32 Data;
+
+    Xil_AssertNonvoid(InstancePtr != NULL);
+    Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
+
+    Data = XDrivescale_ReadReg(InstancePtr->Control_BaseAddress, XDRIVESCALE_CONTROL_ADDR_BRAMPDOWN_DATA);
+    return Data;
+}
+
 void XDrivescale_Set_iCurrentFilter(XDrivescale *InstancePtr, u32 Data) {
     Xil_AssertVoid(InstancePtr != NULL);
     Xil_AssertVoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
@@ -107,14 +137,14 @@ u32 XDrivescale_Get_calibratedStep_BaseAddress(XDrivescale *InstancePtr) {
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
 
-    return (InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_BASE);
+    return (u32)(uintptr_t)(InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_BASE);
 }
 
 u32 XDrivescale_Get_calibratedStep_HighAddress(XDrivescale *InstancePtr) {
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
 
-    return (InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_HIGH);
+    return (u32)(uintptr_t)(InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_HIGH);
 }
 
 u32 XDrivescale_Get_calibratedStep_TotalBytes(XDrivescale *InstancePtr) {
@@ -139,10 +169,10 @@ u32 XDrivescale_Get_calibratedStep_Depth(XDrivescale *InstancePtr) {
 }
 
 u32 XDrivescale_Write_calibratedStep_Words(XDrivescale *InstancePtr, int offset, word_type *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length)*4 > (XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_HIGH - XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_BASE + 1))
         return 0;
@@ -154,10 +184,10 @@ u32 XDrivescale_Write_calibratedStep_Words(XDrivescale *InstancePtr, int offset,
 }
 
 u32 XDrivescale_Read_calibratedStep_Words(XDrivescale *InstancePtr, int offset, word_type *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length)*4 > (XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_HIGH - XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_BASE + 1))
         return 0;
@@ -169,10 +199,10 @@ u32 XDrivescale_Read_calibratedStep_Words(XDrivescale *InstancePtr, int offset, 
 }
 
 u32 XDrivescale_Write_calibratedStep_Bytes(XDrivescale *InstancePtr, int offset, char *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length) > (XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_HIGH - XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_BASE + 1))
         return 0;
@@ -184,10 +214,10 @@ u32 XDrivescale_Write_calibratedStep_Bytes(XDrivescale *InstancePtr, int offset,
 }
 
 u32 XDrivescale_Read_calibratedStep_Bytes(XDrivescale *InstancePtr, int offset, char *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length) > (XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_HIGH - XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_BASE + 1))
         return 0;
@@ -203,14 +233,14 @@ u32 XDrivescale_Get_calibratedOffset_BaseAddress(XDrivescale *InstancePtr) {
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
 
-    return (InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_BASE);
+    return (u32)(uintptr_t)(InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_BASE);
 }
 
 u32 XDrivescale_Get_calibratedOffset_HighAddress(XDrivescale *InstancePtr) {
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
 
-    return (InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_HIGH);
+    return (u32)(uintptr_t)(InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_HIGH);
 }
 
 u32 XDrivescale_Get_calibratedOffset_TotalBytes(XDrivescale *InstancePtr) {
@@ -235,10 +265,10 @@ u32 XDrivescale_Get_calibratedOffset_Depth(XDrivescale *InstancePtr) {
 }
 
 u32 XDrivescale_Write_calibratedOffset_Words(XDrivescale *InstancePtr, int offset, word_type *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length)*4 > (XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_HIGH - XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_BASE + 1))
         return 0;
@@ -250,10 +280,10 @@ u32 XDrivescale_Write_calibratedOffset_Words(XDrivescale *InstancePtr, int offse
 }
 
 u32 XDrivescale_Read_calibratedOffset_Words(XDrivescale *InstancePtr, int offset, word_type *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length)*4 > (XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_HIGH - XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_BASE + 1))
         return 0;
@@ -265,10 +295,10 @@ u32 XDrivescale_Read_calibratedOffset_Words(XDrivescale *InstancePtr, int offset
 }
 
 u32 XDrivescale_Write_calibratedOffset_Bytes(XDrivescale *InstancePtr, int offset, char *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length) > (XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_HIGH - XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_BASE + 1))
         return 0;
@@ -280,10 +310,10 @@ u32 XDrivescale_Write_calibratedOffset_Bytes(XDrivescale *InstancePtr, int offse
 }
 
 u32 XDrivescale_Read_calibratedOffset_Bytes(XDrivescale *InstancePtr, int offset, char *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length) > (XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_HIGH - XDRIVESCALE_CONTROL_ADDR_CALIBRATEDOFFSET_BASE + 1))
         return 0;
@@ -298,14 +328,14 @@ u32 XDrivescale_Get_OffsetCounts_BaseAddress(XDrivescale *InstancePtr) {
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
 
-    return (InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_BASE);
+    return (u32)(uintptr_t)(InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_BASE);
 }
 
 u32 XDrivescale_Get_OffsetCounts_HighAddress(XDrivescale *InstancePtr) {
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
 
-    return (InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_HIGH);
+    return (u32)(uintptr_t)(InstancePtr->Control_BaseAddress + XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_HIGH);
 }
 
 u32 XDrivescale_Get_OffsetCounts_TotalBytes(XDrivescale *InstancePtr) {
@@ -330,10 +360,10 @@ u32 XDrivescale_Get_OffsetCounts_Depth(XDrivescale *InstancePtr) {
 }
 
 u32 XDrivescale_Write_OffsetCounts_Words(XDrivescale *InstancePtr, int offset, word_type *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length)*4 > (XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_HIGH - XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_BASE + 1))
         return 0;
@@ -345,10 +375,10 @@ u32 XDrivescale_Write_OffsetCounts_Words(XDrivescale *InstancePtr, int offset, w
 }
 
 u32 XDrivescale_Read_OffsetCounts_Words(XDrivescale *InstancePtr, int offset, word_type *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length)*4 > (XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_HIGH - XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_BASE + 1))
         return 0;
@@ -360,10 +390,10 @@ u32 XDrivescale_Read_OffsetCounts_Words(XDrivescale *InstancePtr, int offset, wo
 }
 
 u32 XDrivescale_Write_OffsetCounts_Bytes(XDrivescale *InstancePtr, int offset, char *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length) > (XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_HIGH - XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_BASE + 1))
         return 0;
@@ -375,10 +405,10 @@ u32 XDrivescale_Write_OffsetCounts_Bytes(XDrivescale *InstancePtr, int offset, c
 }
 
 u32 XDrivescale_Read_OffsetCounts_Bytes(XDrivescale *InstancePtr, int offset, char *data, int length) {
+    int i;
+
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr -> IsReady == XIL_COMPONENT_IS_READY);
-
-    int i;
 
     if ((offset + length) > (XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_HIGH - XDRIVESCALE_CONTROL_ADDR_OFFSETCOUNTS_BASE + 1))
         return 0;

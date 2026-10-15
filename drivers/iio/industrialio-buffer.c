@@ -1342,6 +1342,7 @@ void iio_disable_all_buffers(struct iio_dev *indio_dev)
 	iio_disable_buffers(indio_dev);
 	iio_buffer_deactivate_all(indio_dev);
 }
+EXPORT_SYMBOL_GPL(iio_disable_all_buffers);
 
 static ssize_t enable_store(struct device *dev, struct device_attribute *attr,
 			    const char *buf, size_t len)

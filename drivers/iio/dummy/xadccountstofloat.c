@@ -21,20 +21,12 @@ int XAdccountstofloat_CfgInitialize(XAdccountstofloat *InstancePtr, XAdccountsto
 }
 #endif
 
-void XAdccountstofloat_WriteReg(int BaseAddress, int RegOffset, int Data) {
-    void *io = ioremap(BaseAddress+RegOffset, 4); 
-  
-	writel(Data, io); 
-	iounmap(io); 
+void XAdccountstofloat_WriteReg(void __iomem *base, int RegOffset, u32 Data) {
+    iowrite32(Data, base + RegOffset);
 }
 
-int XAdccountstofloat_ReadReg(int BaseAddress, int RegOffset) {
-  //  int *address=BaseAddress+RegOffset;
-   	void *io = ioremap(BaseAddress+RegOffset, 4); 
-  //  printk(KERN_INFO "xadctofloat BaseAddress:0x%x io:0x%x\n",BaseAddress+RegOffset,io);
- 	int Data = readl(io); 
-	iounmap(io); 
-	return Data;
+u32 XAdccountstofloat_ReadReg(void __iomem *base, int RegOffset) {
+    return ioread32(base + RegOffset);
 }
 
 void XAdccountstofloat_Set_iCurrentRange(XAdccountstofloat *InstancePtr, u32 Data) {
@@ -123,7 +115,6 @@ void * XAdccountstofloat_Get_OLValid_iomap(XAdccountstofloat *InstancePtr) {
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
     return ioremap(InstancePtr->Control_BaseAddress + XADCCOUNTSTOFLOAT_CONTROL_ADDR_OLVALID_DATA, 4); 
-   // int Data = readl(io);
   //  Data = XAdccountstofloat_ReadReg(InstancePtr->Control_BaseAddress, XADCCOUNTSTOFLOAT_CONTROL_ADDR_OLVALID_DATA);
  //   return Data;
 }
@@ -165,6 +156,17 @@ u32 XAdccountstofloat_Get_gainChanged(XAdccountstofloat *InstancePtr) {
     Data = XAdccountstofloat_ReadReg(InstancePtr->Control_BaseAddress, XADCCOUNTSTOFLOAT_CONTROL_ADDR_GAINCHANGED_DATA);
     return Data;
 }
+
+u32 XAdccountstofloat_Get_status(XAdccountstofloat *InstancePtr) {
+    u32 Data;
+
+    Xil_AssertNonvoid(InstancePtr != NULL);
+    Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
+
+    Data = XAdccountstofloat_ReadReg(InstancePtr->Control_BaseAddress, XADCCOUNTSTOFLOAT_CONTROL_ADDR_STATUS_DATA);
+    return Data;
+}
+
 /*
 u32 XAdccountstofloat_Get_gainChanged_vld(XAdccountstofloat *InstancePtr) {
     u32 Data;
@@ -217,14 +219,14 @@ u32 XAdccountstofloat_Get_cal_step_BaseAddress(XAdccountstofloat *InstancePtr) {
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
 
-    return (InstancePtr->Control_BaseAddress + XADCCOUNTSTOFLOAT_CONTROL_ADDR_CAL_STEP_BASE);
+    return (u32)(uintptr_t)(InstancePtr->Control_BaseAddress + XADCCOUNTSTOFLOAT_CONTROL_ADDR_CAL_STEP_BASE);
 }
 
 u32 XAdccountstofloat_Get_cal_step_HighAddress(XAdccountstofloat *InstancePtr) {
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
 
-    return (InstancePtr->Control_BaseAddress + XADCCOUNTSTOFLOAT_CONTROL_ADDR_CAL_STEP_HIGH);
+    return (u32)(uintptr_t)(InstancePtr->Control_BaseAddress + XADCCOUNTSTOFLOAT_CONTROL_ADDR_CAL_STEP_HIGH);
 }
 
 u32 XAdccountstofloat_Get_cal_step_TotalBytes(XAdccountstofloat *InstancePtr) {
@@ -319,7 +321,7 @@ u32 XAdccountstofloat_Get_cal_offset_HighAddress(XAdccountstofloat *InstancePtr)
     Xil_AssertNonvoid(InstancePtr != NULL);
     Xil_AssertNonvoid(InstancePtr->IsReady == XIL_COMPONENT_IS_READY);
 
-    return (InstancePtr->Control_BaseAddress + XADCCOUNTSTOFLOAT_CONTROL_ADDR_CAL_OFFSET_HIGH);
+    return (u32)(uintptr_t)(InstancePtr->Control_BaseAddress + XADCCOUNTSTOFLOAT_CONTROL_ADDR_CAL_OFFSET_HIGH);
 }
 
 u32 XAdccountstofloat_Get_cal_offset_TotalBytes(XAdccountstofloat *InstancePtr) {

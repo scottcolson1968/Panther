@@ -45,12 +45,12 @@ typedef uint64_t u64;
 #else
 typedef struct {
     u16 DeviceId;
-    u32 Control_BaseAddress;
+    void __iomem *Control_BaseAddress;
 } XAdccountstofloat_Config;
 #endif
 
 typedef struct {
-    u32 Control_BaseAddress;
+    void __iomem *Control_BaseAddress;
     u32 IsReady;
 } XAdccountstofloat;
 
@@ -72,6 +72,9 @@ typedef u32 word_type;
     Xil_In32((BaseAddress) + (RegOffset))
 #else
 
+
+void XAdccountstofloat_WriteReg(void __iomem *base, int RegOffset, u32 Data);
+u32  XAdccountstofloat_ReadReg(void __iomem *base, int RegOffset);
 
 #define Xil_AssertVoid(expr)    assert(expr)
 #define Xil_AssertNonvoid(expr) assert(expr) 
@@ -108,7 +111,8 @@ u32 XAdccountstofloat_Get_iOverloadCount_vld(XAdccountstofloat *InstancePtr);
 u32 XAdccountstofloat_Get_OLValid(XAdccountstofloat *InstancePtr);
 u32 XAdccountstofloat_Get_OLValid_vld(XAdccountstofloat *InstancePtr);
 u32 XAdccountstofloat_Get_gainChanged(XAdccountstofloat *InstancePtr);
-u32 XAdccountstofloat_Get_gainChanged_vld(XAdccountstofloat *InstancePtr);
+//u32 XAdccountstofloat_Get_gainChanged_vld(XAdccountstofloat *InstancePtr);
+u32 XAdccountstofloat_Get_status(XAdccountstofloat *InstancePtr);
 void XAdccountstofloat_Set_reset_i(XAdccountstofloat *InstancePtr, u32 Data);
 u32 XAdccountstofloat_Get_reset_i(XAdccountstofloat *InstancePtr);
 u32 XAdccountstofloat_Get_reset_o(XAdccountstofloat *InstancePtr);

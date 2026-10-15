@@ -26,7 +26,7 @@
 
 #define W1_FAMILY_DEFAULT	0
 
-int w1_timeout = 3600000; // every hour
+int w1_timeout = 0x7fffffff;//3600000; // every hour
 module_param_named(timeout, w1_timeout, int, 0);
 MODULE_PARM_DESC(timeout, "time in seconds between automatic slave searches");
 

@@ -1046,7 +1046,7 @@ static const struct iio_event_spec xadc_voltage_events[] = {
 	},
 };
 
-#define XADC_CHAN_TEMP(_chan, _scan_index, _addr, _bits) { \
+#define XADC_CHAN_TEMP(_chan, _scan_index, _addr, _bits, _ext) { \
 	.type = IIO_TEMP, \
 	.indexed = 1, \
 	.channel = (_chan), \
@@ -1065,6 +1065,7 @@ static const struct iio_event_spec xadc_voltage_events[] = {
 		.shift = 16 - (_bits), \
 		.endianness = IIO_CPU, \
 	}, \
+	.extend_name = _ext, \
 }
 
 #define XADC_CHAN_VOLTAGE(_chan, _scan_index, _addr, _bits, _ext, _alarm) { \
@@ -1089,13 +1090,13 @@ static const struct iio_event_spec xadc_voltage_events[] = {
 }
 
 /* 7 Series */
-#define XADC_7S_CHAN_TEMP(_chan, _scan_index, _addr) \
-	XADC_CHAN_TEMP(_chan, _scan_index, _addr, 12)
+#define XADC_7S_CHAN_TEMP(_chan, _scan_index, _addr, _ext) \
+	XADC_CHAN_TEMP(_chan, _scan_index, _addr, 12, _ext)
 #define XADC_7S_CHAN_VOLTAGE(_chan, _scan_index, _addr, _ext, _alarm) \
 	XADC_CHAN_VOLTAGE(_chan, _scan_index, _addr, 12, _ext, _alarm)
 
 static const struct iio_chan_spec xadc_7s_channels[] = {
-	XADC_7S_CHAN_TEMP(0, 8, XADC_REG_TEMP),
+	XADC_7S_CHAN_TEMP(0, 8, XADC_REG_TEMP, "temp0"),
 	XADC_7S_CHAN_VOLTAGE(0, 9, XADC_REG_VCCINT, "vccint", true),
 	XADC_7S_CHAN_VOLTAGE(1, 10, XADC_REG_VCCAUX, "vccaux", true),
 	XADC_7S_CHAN_VOLTAGE(2, 14, XADC_REG_VCCBRAM, "vccbram", true),
@@ -1125,7 +1126,7 @@ static const struct iio_chan_spec xadc_7s_channels[] = {
 
 /* UltraScale */
 #define XADC_US_CHAN_TEMP(_chan, _scan_index, _addr) \
-	XADC_CHAN_TEMP(_chan, _scan_index, _addr, 10)
+	XADC_CHAN_TEMP(_chan, _scan_index, _addr, 10, "temp")
 #define XADC_US_CHAN_VOLTAGE(_chan, _scan_index, _addr, _ext, _alarm) \
 	XADC_CHAN_VOLTAGE(_chan, _scan_index, _addr, 10, _ext, _alarm)
 

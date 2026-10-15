@@ -47,6 +47,7 @@
 		#dma-cells = <1>;
 		interrupts = <0 54 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&clkc 16>;
+		dma-coherent;
 
 		adi,channels {
 			#size-cells = <0>;
@@ -58,6 +59,7 @@
 				adi,source-bus-type = <2>;
 				adi,destination-bus-width = <64>;
 				adi,destination-bus-type = <0>;
+				adi,cyclic;
 			};
 		};
 	};
@@ -260,101 +262,79 @@
 		};	
 		
 	DriveScale_1: DriveScale@40000000 {
-	 	/* This is a place holder node for a custom IP, user may need to update the entries */
 		clock-names = "ap_clk";
 		clocks = <&clkc 15>;
-		compatible = "dmem-uio";
+		compatible = "sd,drivescale";
 		reg = <0x40000000 0x10000>;
+	};
+	
+	ADCcal_constants: adccal_constants@40010000 {
+	 	/* consolidated 8-channel ADCCountsToFloat8 core (all cal factors) */
+		clock-names = "ap_clk";
+		clocks = <&clkc 16>;
+		compatible = "sd,adccal-constants";
+		reg = <0x40010000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0xa>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+
+
+
+
+
+
+
+	
+	Synch0: Synch@400a0000 {
+		clock-names = "ap_clk";
+		clocks = <&clkc 15>;
+		compatible = "sd,synch";
+		reg = <0x400a0000 0x10000>;
 		xlnx,s-axi-control-addr-width = <0x6>;
 		xlnx,s-axi-control-data-width = <0x20>;
 	};
-	
-	ADCcal_constants0: adccal_constants@40010000 {
-	 	/* channel 1 adc cal factors */
-		clock-names = "ap_clk";
-		clocks = <&clkc 16>;
-		compatible = "dmem-uio";
-		reg = <0x40010000 0x10000>;
-		xlnx,s-axi-control-addr-width = <0x8>;
-		xlnx,s-axi-control-data-width = <0x20>;
+
+	/* FMC FRU EEPROM identity as IIO device attributes (panther_fru driver).
+	 * eeprom1 = the at24 FMC FRU EEPROM already defined in zynq-zed-adv7511.dtsi. */
+	fmc_fru {
+		compatible = "sd,fru";
+		nvmem = <&eeprom1>;
+		nvmem-names = "fru";
 	};
 	
-	ADCcal_constants1: adccal_constants@40020000 {
-	 	/* channel 2 adc cal factors */
-		clock-names = "ap_clk";
-		clocks = <&clkc 16>;
-		compatible = "dmem-uio";
-		reg = <0x40020000 0x10000>;
-		xlnx,s-axi-control-addr-width = <0x8>;
-		xlnx,s-axi-control-data-width = <0x20>;
-	};
-	
-	ADCcal_constants2: adccal_constants@40030000 {
-	 	/* channel 3 adc cal factors */
-		clock-names = "ap_clk";
-		clocks = <&clkc 16>;
-		compatible = "dmem-uio";
-		reg = <0x40030000 0x10000>;
-		xlnx,s-axi-control-addr-width = <0x8>;
-		xlnx,s-axi-control-data-width = <0x20>;
-	};
-	
-	ADCcal_constants3: adccal_constants@40040000 {
-	 	/* channel 4 adc cal factors */
-		clock-names = "ap_clk";
-		clocks = <&clkc 16>;
-		compatible = "dmem-uio";
-		reg = <0x40040000 0x10000>;
-		xlnx,s-axi-control-addr-width = <0x8>;
-		xlnx,s-axi-control-data-width = <0x20>;
-	};
-	
-	ADCcal_constants4: adccal_constants@40050000 {
-	 	/* channel 5 adc cal factors */
-		clock-names = "ap_clk";
-		clocks = <&clkc 16>;
-		compatible = "dmem-uio";
-		reg = <0x40050000 0x10000>;
-		xlnx,s-axi-control-addr-width = <0x8>;
-		xlnx,s-axi-control-data-width = <0x20>;
-	};
-	
-	ADCcal_constants5: adccal_constants@40060000 {
-	 	/* channel 6 adc cal factors */
-		clock-names = "ap_clk";
-		clocks = <&clkc 16>;
-		compatible = "dmem-uio";
-		reg = <0x40060000 0x10000>;
-		xlnx,s-axi-control-addr-width = <0x8>;
-		xlnx,s-axi-control-data-width = <0x20>;
-	};
-	
-	ADCcal_constants6: adccal_constants@40070000 {
-	 	/* channel 7 adc cal factors */
-		clock-names = "ap_clk";
-		clocks = <&clkc 16>;
-		compatible = "dmem-uio";
-		reg = <0x40070000 0x10000>;
-		xlnx,s-axi-control-addr-width = <0x8>;
-		xlnx,s-axi-control-data-width = <0x20>;
-	};
-	
-	ADCcal_constants7: adccal_constants@40080000 {
-	 	/* channel 8 adc cal factors */
-		clock-names = "ap_clk";
-		clocks = <&clkc 16>;
-		compatible = "dmem-uio";
-		reg = <0x40080000 0x10000>;
-		xlnx,s-axi-control-addr-width = <0x8>;
-		xlnx,s-axi-control-data-width = <0x20>;
-	};
-	
-	Synch0: Synch@400a0000 {
-	 	/* This is a place holder node for a custom IP, user may need to update the entries */
+	streamToData_ctrl: streamToData_ctrl@400d0000 {
 		clock-names = "ap_clk";
 		clocks = <&clkc 15>;
 		compatible = "dmem-uio";
-		reg = <0x400a0000 0x10000>;
+		reg = <0x400d0000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x5>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+/*
+	tacho_control@400c0000 {
+		clock-names = "ap_clk";
+		clocks = <&clkc 15>;
+		compatible = "sd,tacho-control";
+		reg = <0x400c0000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x06>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+
+	tacho@400b0000 {
+		clock-names = "ap_clk";
+		clocks = <&clkc 15>;
+		compatible = "sd,tacho";
+		reg = <0x400b0000 0x10000>;
+		xlnx,s-axi-control-addr-width = <0x06>;
+		xlnx,s-axi-control-data-width = <0x20>;
+	};
+	
+	/*Rampdown0: Rampdown@400b0000 {
+	 	/* This is a place holder node for a custom IP, user may need to update the entries 
+		clock-names = "ap_clk";
+		clocks = <&clkc 15>;
+		compatible = "dmem-uio";
+		reg = <0x400b0000 0x10000>;
 		xlnx,s-axi-control-addr-width = <0x6>;
 		xlnx,s-axi-control-data-width = <0x20>; 
 	};
@@ -471,4 +451,24 @@
 
 &usb0 {
 	dr_mode = "otg";
+};
+
+/* HDMI/audio subsystem removed from the PL fabric (Panther15 HDMI-removal
+ * build, 2026-07-10). The adv7511/adau1761 chips remain on I2C but their
+ * drivers are disabled; the axi_hdmi/spdif/i2s/clkgen cores no longer exist
+ * in the bitstream. Shared zynq-zed-adv7511.dtsi is intentionally untouched. */
+&adv7511 { status = "disabled"; };
+&adau1761 { status = "disabled"; };
+&hdmi_dma { status = "disabled"; };
+&hdmi_clock { status = "disabled"; };
+&axi_spdif_tx_0 { status = "disabled"; };
+&axi_i2s_0 { status = "disabled"; };
+
+&fpga_axi {
+	axi_hdmi@70e00000 { status = "disabled"; };
+};
+
+/ {
+	adv7511_hdmi_snd { status = "disabled"; };
+	zed_sound { status = "disabled"; };
 };

@@ -134,7 +134,7 @@ static struct usb_function *f_msg_rndis;
 static int rndis_do_config(struct usb_configuration *c)
 {
 	int ret;
-
+	
 	if (gadget_is_otg(c->cdev->gadget)) {
 		c->descriptors = otg_desc;
 		c->bmAttributes |= USB_CONFIG_ATT_WAKEUP;
@@ -303,7 +303,7 @@ static int multi_bind(struct usb_composite_dev *cdev)
 	struct fsg_opts *fsg_opts;
 	struct fsg_config config;
 	int status;
-
+	
 	if (!can_support_ecm(cdev->gadget)) {
 		dev_err(&gadget->dev, "controller '%s' not usable\n",
 			gadget->name);
@@ -448,6 +448,7 @@ fail:
 
 static int multi_unbind(struct usb_composite_dev *cdev)
 {
+	
 #ifdef CONFIG_USB_G_MULTI_CDC
 	usb_put_function(f_msg_multi);
 #endif

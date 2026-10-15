@@ -109,6 +109,7 @@ void phy_print_status(struct phy_device *phydev)
 			phydev->downshifted_rate ? "(downshifted) " : "",
 			phy_pause_str(phydev));
 	} else	{
+		printk(KERN_INFO "Rampdown ouput");
 		netdev_info(phydev->attached_dev, "Link is Down\n");
 	}
 }

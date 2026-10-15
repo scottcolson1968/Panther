@@ -8,12 +8,12 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/module.h>
-#include <linux/spi/spi.h>
+#include <linux/spi/spi.h> 
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
 #include <linux/regulator/consumer.h>
 #include <linux/gpio.h>
-#include <linux/interrupt.h>
+#include <linux/interrupt.h> 
 #include <linux/of_irq.h>
 
 #include <linux/iio/iio.h>
@@ -24,6 +24,7 @@
 #include <linux/iio/buffer-dmaengine.h>
 
 #include "cf_axi_adc.h"
+#include "../dummy/xsynch.h"
 
 /* AD7768 registers definition */
 #define AD7768_CH_MODE				0x01
@@ -87,6 +88,7 @@ extern void SetOffset(int chan, int val);
 extern int GetOffset(int chan);
 extern void SetStep(int chan, int val);
 extern int GetStep(int chan);
+extern int GetStatus(int chan);
 static int gain[]={0,0,0,0,0,0,0,0};
 
 struct gpio_desc *gpio_reset=NULL;
@@ -149,13 +151,88 @@ static const unsigned int ad7768_4_available_datalines[] = {
 	1, 4
 };
 int var=0;
+int iOneIntOnly=2;
 extern unsigned int g_blockCount;
+extern unsigned int g_sampling_freq;
+extern bool g_acquiring;
+extern XSynch *g_pSynch;
+/*
+ * Both defined in drivers/iio/buffer/industrialio-buffer-dmaengine.c. See the
+ * dac_gate_mode comment there for why the ADC sentinel stamp has to follow how
+ * the DAC is started.
+ */
+extern bool setTriggerBlock;
+extern int  dac_gate_mode;
+extern u32  dacgate_status(void);   /* DacStartGate status, 0 if gate mode off */
+
+/*
+ * Set by ad7768_sync() immediately before it drives SPI_SYNC (defined further
+ * down; declared here because sync_buf() reads it).
+ */
+extern u64 g_last_local_sync_ns;
+
+/*
+ * Did this sync edge come from OUR own SPI_SYNC write, or from another board on
+ * the shared sync line?
+ *
+ * Multi-box only makes sense with exactly one master driving the line. Deciding
+ * that from the logs previously meant cross-correlating two boards' uptime
+ * clocks by hand; this answers it in the message itself. The window is generous
+ * (20 ms) because the SPI transaction plus the ADC's SYNC_OUT response takes a
+ * few ms, and a genuinely external edge is never that close to one of ours.
+ */
+#define AD7768_SELF_SYNC_WINDOW_NS  20000000ULL
+static const char *sync_origin(void)
+{
+	u64 now = ktime_get_ns();
+
+	if (!g_last_local_sync_ns)
+		return "EXTERNAL (we have never issued one)";
+	if (now - g_last_local_sync_ns < AD7768_SELF_SYNC_WINDOW_NS)
+		return "SELF";
+	return "EXTERNAL";
+}
+
 #define GPIO 55
 static irqreturn_t sync_buf(int irq, void *dev_id,struct pt_regs *regs) {
+	struct ad7768_state *st = dev_id;
 	var++;
-	printk(KERN_INFO "interrupt! %d\n",var);
-//	doSync=1;
-	g_blockCount=0; 
+	/*
+	 * Only the FIRST sync IRQ after the input buffer is enabled is treated
+	 * as the start of a run. Subsequent sync IRQs during the same run are
+	 * spurious — log and ignore. g_acquiring is cleared by
+	 * iio_dmaengine_buffer_disable in dmaengine.c when the RX buffer is
+	 * disabled, so the next acquisition starts fresh.
+	 */
+	if (!g_acquiring) {
+		g_acquiring = true;
+		g_blockCount = 0;
+		/* Mirror to FPGA Synch IP bRunningAcq register so userspace +
+		 * HLS can observe the acquisition-active state. */
+		if (g_pSynch)
+			XSynch_Set_bRunningAcq(g_pSynch, 1);
+		/*
+		 * Gate mode: THIS edge is what releases the FPGA DacStartGate, so it
+		 * is also the correct reference for the ADC sentinel stamp. Arm the
+		 * stamp here; the next RX block in dmaengine.c writes 0xffffffff into
+		 * word 0 and the client measures the DAC-to-ADC offset from it. The
+		 * same edge also resets util_ad7768_adc_pack, so the ADC scan counter
+		 * restarts here too -- both streams share one reference.
+		 *
+		 * Legacy mode leaves this alone; dmaengine.c arms the stamp at DAC
+		 * DMA-issue time instead.
+		 */
+		if (dac_gate_mode)
+			setTriggerBlock = true;
+		printk(KERN_INFO "sync interrupt! %d (acquisition start%s) [%s]\n",
+		       var, dac_gate_mode ? ", gate mode: sentinel armed" : "",
+		       sync_origin());
+	} else {
+		printk(KERN_INFO "sync interrupt! %d (spurious — ignored) [%s]\n",
+		       var, sync_origin());
+	}
+	if (st)
+		g_sampling_freq = st->sampling_freq;
 	return IRQ_HANDLED;
 }
 
@@ -381,16 +458,36 @@ exit:
 	return ret;
 }
 
-static int ad7768_sync(struct ad7768_state *st, int type)
+/*
+ * Timestamp of the last SPI_SYNC this board issued itself. sync_buf() compares
+ * against it to tell a SELF-generated edge from one arriving on the shared
+ * sync line from another board. Without this, telling master from slave in a
+ * multi-box rig means cross-correlating two boards' uptime clocks by hand.
+ */
+u64 g_last_local_sync_ns = 0;
+EXPORT_SYMBOL_GPL(g_last_local_sync_ns);
+
+/*
+ * `why` identifies the CALLER. Three paths reach here and only one is a
+ * deliberate trigger:
+ *    start_pulse attr        - the intended trigger
+ *    power_mode/sampling_freq- side effect of a sampling-frequency write
+ *    filter_type             - side effect of a filter change
+ * The last two fire real hardware sync edges during setup. With DacStartGate
+ * engaged those can release the gate early if they land after prefill
+ * completes, so knowing which is which matters.
+ */
+static int ad7768_sync(struct ad7768_state *st, int type, const char *why)
 {
 	int ret;
 	//return 0;
-	if (type==0) { 
+	if (type==0) {
 		printk(KERN_INFO "start trigger pulse removed, using spi_sync\n");
 		type=3;
 	}
 	else if (type==3) {//SPI_SYNC
-		printk(KERN_INFO "issue sync pulse");
+		printk(KERN_INFO "issue sync pulse (%s)", why);
+		g_last_local_sync_ns = ktime_get_ns();
 		ret = ad7768_spi_write_mask(st, AD7768_DATA_CONTROL,
 				    AD7768_DATA_CONTROL_SPI_SYNC_MSK,
 				    AD7768_DATA_CONTROL_SPI_SYNC_CLEAR);
@@ -476,6 +573,17 @@ static int ad7768_set_clk_divs(struct ad7768_state *st,
 				     AD7768_CH_MODE_DEC_RATE_MODE(dec));
 }
 
+/*
+ * Sampling rate most recently APPLIED by ad7768_set_sampling_freq() -- 0 until
+ * the first successful apply after boot.
+ *
+ * Deliberately NOT st->sampling_freq: probe assigns that field directly without
+ * programming the clocks, so comparing a client write against it could skip the
+ * very first real configuration after boot. This is only ever set once the full
+ * reprogram has succeeded, and is invalidated by a direct power_mode write.
+ */
+static unsigned int s_applied_freq;
+
 static int ad7768_set_power_mode(struct iio_dev *dev,
 				 const struct iio_chan_spec *chan,
 				 unsigned int mode)
@@ -511,11 +619,26 @@ static int ad7768_set_power_mode(struct iio_dev *dev,
 /*	ret = ad7768_spi_write_mask(st, AD7768_CH_MODE,
 				    AD7768_CH_MODE_FILTER_TYPE_MSK,
 				    AD7768_CH_MODE_FILTER_TYPE_MODE(0));printk (KERN_INFO "set power mode to %d",mode);*/
-	ret = ad7768_sync(st,3);
+	/*
+	 * Log the power-mode/rate change itself. The original printk above is
+	 * inside a comment block, which is why these writes were invisible and
+	 * the sync pulse they trigger appeared in dmesg with no explanation.
+	 */
+	printk(KERN_INFO "set power mode %d (sampling_freq=%u) - will issue sync\n",
+	       mode, st->sampling_freq);
+	ret = ad7768_sync(st,3,"power_mode/sampling_freq");
 	if (ret < 0)
 		return ret;
 	ret=0;
 	st->power_mode = mode;
+	/*
+	 * A direct power_mode attribute write (chan != NULL -- set_sampling_freq
+	 * calls this with NULL) changes the clocks behind set_sampling_freq's back,
+	 * so its "unchanged" cache can no longer be trusted. Force the next
+	 * sampling_frequency write to re-apply in full.
+	 */
+	if (chan)
+		s_applied_freq = 0;
 
 	return ret;
 }
@@ -553,6 +676,145 @@ static const char * const ad7768_filter_type_enum[] = {
 	"SINC5"
 };
 
+extern void Set_loopDelay(int val);
+
+
+int g_loop_delay_trim;            /* client fine-tuning, written from ad5791.c */
+EXPORT_SYMBOL_GPL(g_loop_delay_trim);
+
+/*
+ * ch9 loopback delay by interpolator path (samp_index 0..8 =
+ * 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144).
+ *
+ * Measured 2026-09-15 on ZedBoard #1: an 8 V DAC step through the gate, then
+ * in ONE capture compare where it lands on the analog loopback (capture word
+ * 0) against the digital echo (word 8 = DriveScale output, before the
+ * interpolation FIRs). Repeatable to +/-1 sample. Confirmed on both ADC
+ * filters: the whole difference between them is the ADC filter latency, the
+ * same term pointOffset already uses (34 WIDEBAND / 4 SINC5).
+ *
+ *     delay = interp_delay[samp_index] + filter term + client trim
+ */
+/*
+ * Per-rate ch9 loopback delay, measured on the PRODUCTION analog route:
+ * DAC coupling 46 (40 kHz reconstruction filter), ADC inputs DC (coupling 20).
+ * THE ROUTE MATTERS: the first version of this table was measured at coupling
+ * 14 (1.2 kHz) and was 156 samples out at 262144. The route delta is a fixed
+ * ~595 us, so in samples it scales with the rate (156 at 262144 down to 1 at
+ * 1024) -- it cannot be corrected with a constant. Re-measure with
+ * /root/aligncheck2.sh <rate> <filter> <reps> 46 if the route changes.
+ */
+static const int ad7768_loop_delay[9] = { 18, 18, 19, 19, 20, 22, 23, 11,  23 };
+static int s_loop_samp_index = -1;
+static int s_loop_adc_filter = -1;      /* 0 = WIDEBAND, 1 = SINC5 */
+
+/*
+ * Per-rate cola delay, written into DriveScale group_delay (0x88).
+ * Measured on the PRODUCTION route: DAC coupling 46 (40 kHz), ADC DC.
+ * It lives here, not in the HLS, so retuning needs no bitstream -- the
+ * HLS colaDelay table was removed for exactly that reason.
+ * 65536 and 131072 differ from the rest because IN65536OUT262144 is the
+ * only path that also feeds the cola interpolation stream.
+ * TIED TO dac_sentinel_echo (currently 32). The cola read index subtracts
+ * s_align_ofs = s_dac_invoc - s_cola_invoc, and the kernel delivers the DAC
+ * sentinel at word dac_sentinel_echo, so moving that index moves cola by the
+ * same number of samples -- measured exactly +16 when it went 16 -> 32, with
+ * near-zero variance at 8192. These values are for 32; change one and the
+ * other must follow.
+ *
+ * Re-measure with /root/colaalign.sh and do NOT inject sentinels while
+ * doing so: the cola read index subtracts s_align_ofs, so priming the
+ * handshake mid-stream shifts the very thing being measured.
+ */
+static const int ad7768_cola_group_delay[9] = {
+	-307, -307, -306, -306, -305, -305, -323, -316, -306
+};
+
+int g_group_delay_trim;	/* client trim, written from ad5791.c */
+EXPORT_SYMBOL_GPL(g_group_delay_trim);
+
+extern void Set_group_delay(int val);
+
+static void ad7768_apply_cola_group_delay(void)
+{
+	int gd;
+
+	if (s_loop_samp_index < 0 || s_loop_samp_index > 8)
+		return;
+	gd = ad7768_cola_group_delay[s_loop_samp_index] + g_group_delay_trim;
+	Set_group_delay(gd);
+	printk(KERN_INFO "cola group_delay %d (path %d, trim %d)\n",
+		   gd, s_loop_samp_index, g_group_delay_trim);
+}
+
+void ad7768_cola_group_delay_retrim(void)
+{
+	ad7768_apply_cola_group_delay();
+}
+EXPORT_SYMBOL_GPL(ad7768_cola_group_delay_retrim);
+
+static void ad7768_apply_loop_delay(void);
+
+/*
+ * Extra ch9 delay for DAC analog routes other than the one the loop-delay
+ * table was calibrated on (coupling 46, the 40 kHz reconstruction filter).
+ * Values are the measured miss at 262144; the route difference is a fixed
+ * TIME, so scale with the rate instead of using a constant.
+ * Bank comes from the coupling write: (coupling >> 4) & 0x3.
+ *   bank 0 = coupling 14 = 1.2 kHz, 1 = 30 = 10 kHz,
+ *   bank 2 = 46 = 40 kHz (calibration route), 3 = 62 = CAL/short.
+ */
+static const int ad7768_route_delay_262144[4] = { 156, 11, 0, -6 };
+static int s_dac_route_bank = 2;	/* 40 kHz until the client says otherwise */
+
+static int ad7768_route_delay(void)
+{
+	int base, num;
+
+	if (s_dac_route_bank < 0 || s_dac_route_bank > 3 ||
+	    s_loop_samp_index < 0 || s_loop_samp_index > 8)
+		return 0;
+	base = ad7768_route_delay_262144[s_dac_route_bank];
+	if (!base)
+		return 0;
+	/* base is quoted at samp_index 8; halve per step down, rounded */
+	num = base << s_loop_samp_index;
+	return num >= 0 ? (num + 128) / 256 : -(((-num) + 128) / 256);
+}
+
+void ad7768_set_dac_route(int bank)
+{
+	if (bank < 0 || bank > 3 || bank == s_dac_route_bank)
+		return;
+	s_dac_route_bank = bank;
+	ad7768_apply_loop_delay();
+}
+EXPORT_SYMBOL_GPL(ad7768_set_dac_route);
+
+static void ad7768_apply_loop_delay(void)
+{
+	int d;
+
+	if (s_loop_samp_index < 0 || s_loop_samp_index > 8 || s_loop_adc_filter < 0)
+		return;
+	d = ad7768_loop_delay[s_loop_samp_index]
+		+ (s_loop_adc_filter ? 4 : 34)
+		+ ad7768_route_delay()
+		+ g_loop_delay_trim;
+	Set_loopDelay(d);
+	printk(KERN_INFO "loop_delay %d (path %d, %s, route bank %d %+d, trim %d)\n", d,
+		   s_loop_samp_index, s_loop_adc_filter ? "SINC5" : "WIDEBAND",
+		   s_dac_route_bank, ad7768_route_delay(), g_loop_delay_trim);
+	ad7768_apply_cola_group_delay();
+}
+
+/* Called from ad5791.c when the client writes the trim. */
+void ad7768_loop_delay_retrim(void)
+{
+	ad7768_apply_loop_delay();
+}
+EXPORT_SYMBOL_GPL(ad7768_loop_delay_retrim);
+
 static int ad7768_set_filter_type(struct iio_dev *dev,
 				  const struct iio_chan_spec *chan,
 				  unsigned int filter)
@@ -563,13 +825,33 @@ static int ad7768_set_filter_type(struct iio_dev *dev,
 	if (filter)  // SINC5
 		Set_pointOffset(chan->channel,4); // there's an internal buffer of 4 points in SINC5 filter
 	else Set_pointOffset(chan->channel,34); // there's an internal buffer of 34 points in WIDEBAND filter
+	s_loop_adc_filter = filter ? 1 : 0;
+	ad7768_apply_loop_delay();
+	/*
+	 * Unchanged filter: skip the SPI write AND the sync pulse, for the same
+	 * reason as an unchanged sampling_frequency -- the pulse is a real sync_n
+	 * edge and would release an armed, not-yet-prefilled DacStartGate.
+	 * Set_pointOffset above still runs, preserving the existing behaviour of a
+	 * filter_type write resetting the point offset. If the read fails, fall
+	 * through to the normal write + pulse rather than guess.
+	 */
+	{
+		unsigned int cur;
+
+		if (ad7768_spi_reg_read(st, AD7768_CH_MODE, &cur) >= 0 &&
+		    AD7768_CH_MODE_GET_FILTER_TYPE(cur) == filter) {
+			printk(KERN_INFO "filter_type %u unchanged - no sync pulse\n",
+			       filter);
+			return 0;
+		}
+	}
 	ret = ad7768_spi_write_mask(st, AD7768_CH_MODE,
 				    AD7768_CH_MODE_FILTER_TYPE_MSK,
 				    AD7768_CH_MODE_FILTER_TYPE_MODE(filter));
 	if (ret < 0)
 		return ret;
 //	printk(KERN_INFO "set filter to %d",filter);
-	return ad7768_sync(st,3);
+	return ad7768_sync(st,3,"filter_type");
 }
 
 static int ad7768_get_filter_type(struct iio_dev *dev,
@@ -648,8 +930,8 @@ static int ad7768_set_start_pulse(struct iio_dev *dev,
 {
 //	return 0;
 	struct ad7768_state *st = ad7768_get_data(dev);
-	printk(KERN_INFO "start pulse",type);
-	return ad7768_sync(st,type);
+	printk(KERN_INFO "start pulse %d",type);
+	return ad7768_sync(st,type,"start_pulse attr");
 	
 }
 
@@ -671,7 +953,7 @@ static int ad7768_set_sampling_freq(struct iio_dev *dev,
 		return -EINVAL;
 	for (i=0;i<9;i++) {
 		if (freq==ad7768_sampl_freq_avail[i])
-			SetSampIndex(i);
+			samp_index = i;	/* latch AFTER the clock reconfig (see below) */
 	}
 
 	mutex_lock(&st->lock);
@@ -690,6 +972,36 @@ static int ad7768_set_sampling_freq(struct iio_dev *dev,
 		goto freq_err;
 	}
 
+	if (freq == s_applied_freq) {
+		/*
+		 * Unchanged rate: nothing to reprogram, so issue NO sync pulse.
+		 *
+		 * Every sampling_frequency write used to reprogram the clocks and
+		 * fire ad7768_sync() even when the value had not changed. That pulse
+		 * is a real edge on sync_n. With the DacStartGate armed (DAC buffer
+		 * open) and REQUIRE_PREFILL=0, the gate releases on the first edge
+		 * after arm -- so a redundant rate write released it BEFORE the DAC
+		 * data arrived, and the run started unaligned (prefilled=0).
+		 * Captured twice with the new client, 2026-09-10: a repeated 262144
+		 * write 250 ms before the first WRITEBUF, and a repeated 131072 write
+		 * issued just after the DAC buffer had been recreated.
+		 *
+		 * SetSampIndex still runs, so streamToData's held path select is
+		 * guaranteed correct even when this is the first write after boot.
+		 *
+		 * This removes redundant pulses at their SOURCE. It cannot stop a
+		 * slave from seeing the master's genuine rate-change pulse on the
+		 * shared sync line -- that still needs the client to finish its rate
+		 * writes before creating the DAC buffers.
+		 */
+		printk(KERN_INFO "sampling_freq %u unchanged - no reprogram, no sync pulse\n",
+		       freq);
+		SetSampIndex(samp_index);
+		s_loop_samp_index = samp_index;
+		ad7768_apply_loop_delay();
+		goto freq_err;          /* ret == 0: unlock and return success */
+	}
+
 	ret = ad7768_set_clk_divs(st, ad7768_mclk_divs[power_mode], freq);
 	if (ret < 0)
 		goto freq_err;
@@ -699,6 +1011,15 @@ static int ad7768_set_sampling_freq(struct iio_dev *dev,
 	ret = ad7768_set_power_mode(dev, NULL, power_mode);
 	if (ret < 0)
 		goto freq_err;
+
+	/* Latch the streamToData interpolation index AFTER the ADC clock has been
+	 * reconfigured.  Doing it before (the old order) latched the interpolator
+	 * phase against the previous clock on a live rate change, leaving the
+	 * DAC->ADC loopback ~12 samples misaligned until fs was rewritten. */
+	SetSampIndex(samp_index);
+	s_loop_samp_index = samp_index;
+	ad7768_apply_loop_delay();
+	s_applied_freq = freq;   /* only after the full reprogram succeeded */
 
 freq_err:
 	mutex_unlock(&st->lock);
@@ -907,6 +1228,18 @@ static ssize_t Get_iCurrentStep(struct iio_dev *indio_dev, uintptr_t private, co
 	return len;
 }
 
+static ssize_t Get_iCurrentStatus(struct iio_dev *indio_dev, uintptr_t private, const struct iio_chan_spec *chan, char *buf) {
+	unsigned long val,len;
+	if (chan->channel==8) 
+		val=0;
+	else 
+		val=GetStatus(chan->channel);
+	
+	len = sprintf(buf, "%d\0", val)+1;
+	printk(KERN_INFO "get channel %d status %d from %s len %d",chan->channel,val,buf,len);
+	return len;
+}
+
 static ssize_t Set_iCurrentStep(struct iio_dev *indio_dev, uintptr_t private, const struct iio_chan_spec *chan, const char *buf, size_t len) {
 	unsigned long val;
 	kstrtol(buf,10,&val);
@@ -915,6 +1248,63 @@ static ssize_t Set_iCurrentStep(struct iio_dev *indio_dev, uintptr_t private, co
 		SetStep(chan->channel, val);
 	return len;//=sprintf(buf,"%d",val);
 //	return sprintf(buf,"%d",val);;
+}
+
+/*
+ * resync -- write-only: issue ONE sync pulse on demand, even when nothing has
+ * changed (added 2026-09-14).
+ *
+ * A filter_type or sampling_frequency change on a SLAVE only takes effect at
+ * the next sync edge, and a slave cannot produce one: its local SPI_SYNC
+ * drives the AD7768's SYNC_OUT, which is not routed anywhere in slave mode.
+ * The edge has to come from the master. When the client configures the master
+ * first, the master's own setup pulse goes out BEFORE the slave's register
+ * write lands, so the slave's ADC sits halted until the next edge -- the
+ * start_pulse. Its DAC cannot prefill meanwhile (the prefill is paced by the
+ * ADC sample strobe), so the slave's DacStartGate releases with an empty FIFO
+ * and its DAC starts late. Reproduced on the two-box rig on the first run
+ * after boot and on any run after a real ADC filter_type change
+ * (SINC5 <-> WIDEBAND). Since kernel #612 rewriting an unchanged value no
+ * longer pulses, so the client needs an explicit way to fire one.
+ *
+ * Client sequence: configure every board -> write resync=1 on the MASTER ->
+ * open the DAC buffers -> submit data -> start_pulse.
+ *
+ * Refused with -EBUSY while this board's DAC gate is armed: an edge then would
+ * release the gate before the prefill -- the misaligned start this exists to
+ * prevent. The master cannot see a slave's gate, so the client must call it
+ * before ANY board opens its DAC buffer.
+ */
+static ssize_t ad7768_read_resync(struct iio_dev *indio_dev, uintptr_t private,
+				  const struct iio_chan_spec *chan, char *buf)
+{
+	return sysfs_emit(buf, "0\n");
+}
+
+static ssize_t ad7768_write_resync(struct iio_dev *indio_dev, uintptr_t private,
+				   const struct iio_chan_spec *chan,
+				   const char *buf, size_t len)
+{
+	struct ad7768_state *st = ad7768_get_data(indio_dev);
+	bool doit;
+	int ret;
+
+	ret = kstrtobool(buf, &doit);
+	if (ret)
+		return ret;
+	if (!doit)
+		return len;
+
+	if (dacgate_status() & 0x1) {
+		printk(KERN_WARNING "resync refused: DAC gate armed (DAC buffer open) - the edge would release it before the prefill\n");
+		return -EBUSY;
+	}
+
+	mutex_lock(&st->lock);
+	ret = ad7768_sync(st, 3, "resync attr");
+	mutex_unlock(&st->lock);
+
+	return ret < 0 ? ret : len;
 }
 
 static struct iio_chan_spec_ext_info ad7768_ext_info[] = {
@@ -943,6 +1333,12 @@ static struct iio_chan_spec_ext_info ad7768_ext_info[] = {
 			   IIO_SHARED_BY_ALL,
 			   &ad7768_start_pulse_iio_enum),
 	{
+		.name = "resync",
+		.read = ad7768_read_resync,
+		.write = ad7768_write_resync,
+		.shared = IIO_SHARED_BY_ALL,
+	},
+	{
 		.name="coupling",
 		.read=getCoupling,
 		.write=setCoupling,
@@ -952,6 +1348,12 @@ static struct iio_chan_spec_ext_info ad7768_ext_info[] = {
 		.name="step",
 		.read=Get_iCurrentStep,
 		.write=Set_iCurrentStep,
+		.shared=IIO_SEPARATE,
+	},
+	{
+		.name="AD7768_status",
+		.read=Get_iCurrentStatus,
+		.write=NULL,
 		.shared=IIO_SEPARATE,
 	},
 	{
@@ -1210,6 +1612,24 @@ static int ad7768_probe(struct spi_device *spi)
 	ret = ad7768_set_sampling_freq(indio_dev, AD7768_MAX_SAMP_FREQ);
 	if (ret < 0)
 		return ret;
+
+	/*
+	 * Seed the ch9 loop delay from the chip's current filter (2026-09-15).
+	 * Without this s_loop_adc_filter stays -1 and apply_loop_delay() bails
+	 * out, so after a fresh boot ch9 carried NO delay until the client
+	 * happened to write filter_type. Read rather than assume the reset
+	 * default -- measured on hardware the part comes up in SINC5, not
+	 * WIDEBAND. The fallback only matters if the SPI read itself fails.
+	 */
+	{
+		unsigned int mode;
+
+		if (ad7768_spi_reg_read(st, AD7768_CH_MODE, &mode) >= 0)
+			s_loop_adc_filter = AD7768_CH_MODE_GET_FILTER_TYPE(mode) ? 1 : 0;
+		else
+			s_loop_adc_filter = 0;
+		ad7768_apply_loop_delay();
+	}
 	
 	ret =  ad7768_spi_write_mask(st, AD7768_INTERFACE_CFG,
 				     AD7768_INTERFACE_CFG_CRC_SELECT_MSK,
@@ -1239,8 +1659,8 @@ static int ad7768_probe(struct spi_device *spi)
 	}*/
 //	irq_line = 88;//gpio_to_irq(GPIO);
 	printk(KERN_INFO "irq_line = %d",irq_line);
-	free_irq(irq_line,NULL);
-	errno = request_irq(irq_line, (irq_handler_t)sync_buf, IRQF_TRIGGER_RISING, "sync_buf",NULL);
+	free_irq(irq_line, st);
+	errno = request_irq(irq_line, (irq_handler_t)sync_buf, IRQF_TRIGGER_RISING, "sync_buf", st);
 	if (errno < 0)
 		printk(KERN_INFO "Problem requesting IRQ errno = %d", errno);
 	printk(KERN_INFO "IRQ installed at %d",irq_line);

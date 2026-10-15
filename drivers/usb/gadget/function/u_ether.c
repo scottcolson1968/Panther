@@ -644,7 +644,7 @@ static int eth_stop(struct net_device *net)
 {
 	struct eth_dev	*dev = netdev_priv(net);
 	unsigned long	flags;
-
+	printk(KERN_INFO "eth stop");
 	VDBG(dev, "%s\n", __func__);
 	netif_stop_queue(net);
 
@@ -1087,7 +1087,7 @@ struct net_device *gether_connect(struct gether *link)
 {
 	struct eth_dev		*dev = link->ioport;
 	int			result = 0;
-
+	printk(KERN_INFO "gether_connect");
 	if (!dev)
 		return ERR_PTR(-EINVAL);
 
@@ -1161,11 +1161,13 @@ EXPORT_SYMBOL_GPL(gether_connect);
  * The endpoints are inactive, and accordingly without active USB I/O.
  * Pointers to endpoint descriptors and endpoint private data are nulled.
  */
+extern void SetRampDown(void);
 void gether_disconnect(struct gether *link)
 {
 	struct eth_dev		*dev = link->ioport;
 	struct usb_request	*req;
-
+	SetRampDown();
+	printk(KERN_INFO "gether_disconnect");
 	WARN_ON(!dev);
 	if (!dev)
 		return;

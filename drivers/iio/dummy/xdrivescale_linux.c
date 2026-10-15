@@ -138,7 +138,7 @@ int XDrivescale_Initialize(XDrivescale *InstancePtr, const char* InstanceName) {
     	strcpy(file, "/sys/class/uio/uio0/name");
  //   	strcat(file, namelist[i]->d_name);
  //   	strcat(file, "/name");
-        if ((line_from_file(file, name) == 0) && (strcmp(name, "DriveScale") == 0)) {
+        if ((line_from_file(file, name) == 0) && (strcmp(name, "DriveScale") == 0)) { //DriveScale from device tree
             flag = 1;
           /*  s = namelist[i]->d_name;
             s += 3; // "uio"*/

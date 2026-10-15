@@ -20,14 +20,16 @@
 #include <linux/module.h>
 #include <linux/bitops.h>
 #include <linux/delay.h>
+#include <linux/io.h>
 #include <linux/gpio/consumer.h>
 
+#include <linux/math64.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/buffer.h>
 #include <linux/iio/buffer-dma.h>
 #include <linux/iio/buffer-dmaengine.h>
 #include <linux/iio/sysfs.h>
-#include <linux/iio/dac/ad5791.h>
+#include <linux/iio/dac/ad5791.h> // see about getting rid of this
 
 #define AD5791_DAC_MASK			GENMASK(19, 0)
 
@@ -68,6 +70,7 @@
 #define AD5791_DAC_PWRDN_3STATE		1
 int iFilterSelect=3;
 struct gpio_descs *outcoupling=NULL;
+struct iio_dev *g_indio_dev;
 //struct gpio_descs *synchgpio=NULL;
 extern void SetDriveOffset(int);
 extern int GetDriveOffset(void);
@@ -75,7 +78,17 @@ extern void SetDriveStep(int);
 extern int GetDriveStep(void);
 extern void SetDriveScale(int);
 extern int GetDriveScale(void);
+extern void SetClipValue(int);
+extern int GetClipValue(void);
+
 extern void GetDriveCounts(int counts[]);
+extern void iio_disable_all_buffers(struct iio_dev *indio_dev);
+extern int g_cola_enabled;
+#define DRIVESCALE_BASE_ADDR_AD5791  0x40000000UL
+#define DRIVESCALE_COLA_ENABLE_OFFSET  0x80
+#define DRIVESCALE_GROUP_DELAY_OFFSET  0x88
+static void __iomem *g_ds_base = NULL;
+extern u32 iio_dma_read_output_word_from_end(u32 offset);
 /**
  * struct ad5791_chip_info - chip specific information
  * @get_lin_comp:	function pointer to the device specific function
@@ -108,6 +121,7 @@ struct ad5791_state {
 	bool				pwr_down;
 	unsigned int num_bits;
 	unsigned			cached_val;
+	u32				rampdown_start_val; /* DAC code captured in postdisable */
 	struct spi_transfer spi_transfer;
 	struct spi_message spi_msg;
 	union {
@@ -130,15 +144,47 @@ enum ad5791_supported_device_ids {
 static int ad5791_spi_write(struct ad5791_state *st, u8 addr, u32 val)
 {
 	u8 write_command[3];
-	st->data[0].d32 = /*cpu_to_be32(*/AD5791_CMD_WRITE |
+	st->data[0].d32 = cpu_to_be32(AD5791_CMD_WRITE |
 			      AD5791_ADDR(addr) |
-			      (val & AD5791_DAC_MASK);
+			      (val & AD5791_DAC_MASK));
 			      
-	write_command[0] =(st->data[0].d32 >> 16) & 0xFF;
-	write_command[1] =(st->data[0].d32 >> 8) & 0xFF;
-	write_command[2] =(st->data[0].d32 >> 0) & 0xFF;
+//	write_command[0] =(st->data[0].d32 >> 16) & 0xFF;
+//	write_command[1] =(st->data[0].d32 >> 8) & 0xFF;
+//	write_command[2] =(st->data[0].d32 >> 0) & 0xFF;
 //	printk(KERN_INFO "SPI write 0x%x or 0x%x\n",st->data[0].d32,st->data[0].d8[1]);
-	return spi_write(st->spi, write_command, 3);
+//	return spi_write(st->spi, write_command, 3);
+	return spi_write(st->spi, &st->data[0].d8[1], 3);
+}
+
+/* Like ad5791_spi_read but uses spi_sync_locked — call only while
+ * spi_bus_lock is held (e.g. from postdisable).
+ */
+static int ad5791_spi_read_locked(struct ad5791_state *st, u8 addr, u32 *val)
+{
+	struct spi_transfer xfers[] = {
+		{
+			.tx_buf        = &st->data[0].d8[1],
+			.bits_per_word = 8,
+			.len           = 3,
+			.cs_change     = 1,
+		}, {
+			.tx_buf        = &st->data[1].d8[1],
+			.rx_buf        = &st->data[2].d8[1],
+			.bits_per_word = 8,
+			.len           = 3,
+		},
+	};
+	struct spi_message msg;
+	int ret;
+
+	st->data[0].d32 = cpu_to_be32(AD5791_CMD_READ | AD5791_ADDR(addr));
+	st->data[1].d32 = cpu_to_be32(AD5791_ADDR(AD5791_ADDR_NOOP));
+
+	spi_message_init_with_transfers(&msg, xfers, ARRAY_SIZE(xfers));
+	ret = spi_sync_locked(st->spi, &msg);
+
+	*val = be32_to_cpu(st->data[2].d32);
+	return ret;
 }
 
 static int ad5791_spi_read(struct ad5791_state *st, u8 addr, u32 *val)
@@ -282,13 +328,13 @@ static int ad5791_read_raw(struct iio_dev *indio_dev,
 	struct ad5791_state *st = iio_priv(indio_dev);
 	u64 val64;
 	int ret;
-	printk (KERN_INFO "read raw mask %d \n",m);
-	
+		
 	switch (m) {
 	case IIO_CHAN_INFO_RAW:
-		*val = st->cached_val;
-		return IIO_VAL_INT;
+	/*	*val = st->cached_val;
+		return IIO_VAL_INT;*/
 		ret = ad5791_spi_read(st, chan->address, val);
+		printk (KERN_INFO "read raw %d \n",*val);
 		if (ret)
 			return ret;
 		*val &= AD5791_DAC_MASK;
@@ -299,6 +345,10 @@ static int ad5791_read_raw(struct iio_dev *indio_dev,
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_OFFSET:
 		*val=GetDriveOffset();
+		return IIO_VAL_INT;
+		break;
+	case IIO_CHAN_INFO_PEAK:
+		*val=GetClipValue();
 		return IIO_VAL_INT;
 		break;
 /*	case IIO_CHAN_INFO_HYSTERESIS:	
@@ -343,6 +393,133 @@ static ssize_t Get_iCurrentStep(struct iio_dev *indio_dev, uintptr_t private, co
 	printk(KERN_INFO "get step %d from %s len %d",val,buf,len);
 	return len;
 }
+/*
+static ssize_t Set_RampdownRate(struct iio_dev *indio_dev, uintptr_t private, const struct iio_chan_spec *chan, const char *buf, size_t len) {
+	unsigned long val;
+	kstrtol(buf,10,&val);
+	printk(KERN_INFO "set rate %d from %s",val,buf);
+	SetRampRate(val);
+	return len;//=sprintf(buf,"%d",val);
+//	return sprintf(buf,"%d",val);;
+}
+
+static ssize_t Get_RampdownRate(struct iio_dev *indio_dev, uintptr_t private, const struct iio_chan_spec *chan, char *buf) {
+	unsigned long val,len;
+	val=GetRampRate();
+	
+	len = sprintf(buf, "%d\0", val)+1;
+	printk(KERN_INFO "get rate %d from %s len %d",val,buf,len);
+	return len;
+}
+
+
+
+static ssize_t iSet_Rampdown(struct iio_dev *indio_dev, uintptr_t private, const struct iio_chan_spec *chan, const char *buf, size_t len) {
+	unsigned long val;
+	kstrtol(buf,10,&val);
+	printk(KERN_INFO "set rampdown %d from %s",val,buf);
+//	SetRampDown(val);
+	if (val) iio_disable_all_buffers(indio_dev);
+	return len;//=sprintf(buf,"%d",val);
+//	return sprintf(buf,"%d",val);;
+}
+
+static ssize_t iGet_Rampdown(struct iio_dev *indio_dev, uintptr_t private, const struct iio_chan_spec *chan, char *buf) {
+	unsigned long val,len;
+//	val=GetRampDown();
+	
+	len = sprintf(buf, "%d\0", val)+1;
+	printk(KERN_INFO "get rampdown %d from %s len %d",val,buf,len);
+	return len; 
+}
+*/
+/* Compute (a * b / c) for IEEE 754 single-precision floats
+ * packed in u32, returning the result as s32.
+ * No FPU instructions are used.
+ */
+static s32 fp32_muldiv_to_s32(u32 a, u32 b, u32 c)
+{
+	int sa, sb, sc, ea, eb, ec, result_exp, shift;
+	u64 ma, mb, mab;
+	u32 mc;
+	u64 result_u64;
+
+	/* Zero / denormal / inf / nan -> 0 */
+	if (!(a & 0x7FFFFFFF) || !(b & 0x7FFFFFFF) || !(c & 0x7FFFFFFF))
+		return 0;
+	ea = (a >> 23) & 0xFF;
+	eb = (b >> 23) & 0xFF;
+	ec = (c >> 23) & 0xFF;
+	if (!ea || !eb || !ec || ea == 0xFF || eb == 0xFF || ec == 0xFF)
+		return 0;
+
+	sa = (int)(a >> 31);
+	sb = (int)(b >> 31);
+	sc = (int)(c >> 31);
+
+	/* Mantissas with implicit leading 1, range [2^23, 2^24) */
+	ma = ((u64)(a & 0x7FFFFF)) | 0x800000ULL;
+	mb = ((u64)(b & 0x7FFFFF)) | 0x800000ULL;
+	mc = (u32)((c & 0x7FFFFF) | 0x800000U);
+
+	/* ma*mb in [2^46, 2^48); dividing by mc in [2^23, 2^24) */
+	/* gives mab in [2^22, 2^25)                               */
+	mab = ma * mb;
+	do_div(mab, mc);   /* do_div: u64/u32, avoids __aeabi_uldivmod */
+
+	/* Float value = mab * 2^(ea+eb-ec-127-23) */
+	result_exp = (int)(ea + eb - ec) - 127 - 23;
+
+	if (result_exp >= 0) {
+		if (result_exp >= 32)
+			return (sa ^ sb ^ sc) ? S32_MIN : S32_MAX;
+		result_u64 = mab << result_exp;
+	} else {
+		shift = -result_exp;
+		if (shift >= 64)
+			return 0;
+		result_u64 = mab >> shift;
+	}
+
+	if (result_u64 > (u64)S32_MAX)
+		result_u64 = (u64)S32_MAX;
+
+	return (sa ^ sb ^ sc) ? -(s32)result_u64 : (s32)result_u64;
+}
+
+void SetRampDown(void) {
+	struct ad5791_state *st = iio_priv(g_indio_dev);
+	int val=0;
+	s32 dac_from_dma;
+	u32 last_dma        = iio_dma_read_output_word_from_end(0);
+	u32 second_last_dma = iio_dma_read_output_word_from_end(1);
+	dac_from_dma = fp32_muldiv_to_s32(last_dma,
+					   (u32)GetDriveScale(),
+					   (u32)GetDriveStep());
+	iio_disable_all_buffers(g_indio_dev);
+	/* DAC value was captured in postdisable before offload was
+	 * disabled, so it is guaranteed to be a clean, in-range read.
+	 */
+	val = (int)st->rampdown_start_val;
+	val &= AD5791_DAC_MASK;
+//	val >>= chan->scan_type.shift;
+	//printk (KERN_INFO "Ramp Down from Val %d\n",val);
+	if (val & 0x80000) {  // negative value: increment in 20-bit space toward 0
+		printk(KERN_INFO "ramp up to 0 from negative value 0x%x last_dma: 0x%x second_last_dma: 0x%x dac_from_dma: 0x%x", val, last_dma, second_last_dma, (u32)dac_from_dma);
+		while (val != 0) {
+			val = (val + 1) & AD5791_DAC_MASK;
+			ad5791_spi_write(st, AD5791_ADDR_DAC0, val);
+		}
+	}
+	else {
+		printk(KERN_INFO "ramp down to 0 from positive value 0x%x last_dma: 0x%x second_last_dma: 0x%x dac_from_dma: 0x%x", val, last_dma, second_last_dma, (u32)dac_from_dma);
+		while (val != 0) {
+			val--;
+			ad5791_spi_write(st, AD5791_ADDR_DAC0, val);
+		}
+	}
+	printk(KERN_INFO "ramp down done");
+}
 
 static ssize_t Set_iCurrentStep(struct iio_dev *indio_dev, uintptr_t private, const struct iio_chan_spec *chan, const char *buf, size_t len) {
 	unsigned long val;
@@ -353,6 +530,94 @@ static ssize_t Set_iCurrentStep(struct iio_dev *indio_dev, uintptr_t private, co
 //	return sprintf(buf,"%d",val);;
 }
 
+
+static ssize_t getColaEnabled(struct iio_dev *indio_dev, uintptr_t private,
+			       const struct iio_chan_spec *chan, char *buf) {
+	printk(KERN_INFO "colaEnabled read: %d\n", g_cola_enabled);
+	return sprintf(buf, "%d\n", g_cola_enabled);
+}
+
+static ssize_t setColaEnabled(struct iio_dev *indio_dev, uintptr_t private,
+			       const struct iio_chan_spec *chan, const char *buf, size_t len) {
+	long val;
+	kstrtol(buf, 10, &val);
+	g_cola_enabled = val ? 1 : 0;
+	if (!g_ds_base)
+		g_ds_base = ioremap(DRIVESCALE_BASE_ADDR_AD5791, 0x10000);
+	if (g_ds_base) {
+		iowrite32(g_cola_enabled, g_ds_base + DRIVESCALE_COLA_ENABLE_OFFSET);
+		printk(KERN_INFO "colaEnabled set to %d\n", g_cola_enabled);
+	} else {
+		printk(KERN_INFO "colaEnabled write failed: ioremap returned NULL\n");
+	}
+	return len;
+}
+
+/*
+ * ch9 loopback delay trim (2026-09-15).
+ *
+ * ad7768.c sets the delay itself from a per-rate table measured on hardware
+ * (19,20,21,24,30,41,62,89,178 by interpolator path) plus the ADC filter term
+ * (34 WIDEBAND / 4 SINC5). This attribute is a SIGNED trim added on top, for
+ * fine tuning from the client. It is re-applied on every rate or filter
+ * change, so it survives a table value changing underneath it.
+ */
+extern int g_loop_delay_trim;
+extern void ad7768_loop_delay_retrim(void);
+
+static ssize_t getLoopDelay(struct iio_dev *indio_dev, uintptr_t private,
+				  const struct iio_chan_spec *chan, char *buf) {
+	return sprintf(buf, "%d\n", g_loop_delay_trim);
+}
+
+static ssize_t setLoopDelay(struct iio_dev *indio_dev, uintptr_t private,
+				  const struct iio_chan_spec *chan, const char *buf, size_t len) {
+	long val;
+
+	if (kstrtol(buf, 10, &val))
+		return -EINVAL;
+	if (val < -255 || val > 255)
+		return -ERANGE;
+	g_loop_delay_trim = (int)val;
+	ad7768_loop_delay_retrim();
+	printk(KERN_INFO "loop_delay trim set to %d\n", g_loop_delay_trim);
+	return len;
+}
+
+extern int g_group_delay_trim;
+extern void ad7768_set_dac_route(int bank);
+extern void ad7768_cola_group_delay_retrim(void);
+
+/* This is the TRIM now (see setGroupDelay), so it must default to 0.
+ * It used to be the absolute register value and defaulted to -89; leaving
+ * that here made the attribute READ -89 while the trim actually applied
+ * was 0, so any client doing a read-modify-write would have shifted cola
+ * by 89 samples. */
+static int g_group_delay;
+
+static ssize_t getGroupDelay(struct iio_dev *indio_dev, uintptr_t private,
+			      const struct iio_chan_spec *chan, char *buf) {
+	return sprintf(buf, "%d\n", g_group_delay);
+}
+
+static ssize_t setGroupDelay(struct iio_dev *indio_dev, uintptr_t private,
+			      const struct iio_chan_spec *chan, const char *buf, size_t len) {
+	long val;
+	kstrtol(buf, 10, &val);
+	/*
+	 * TRIM, not an absolute value (2026-09-15). ad7768.c owns the per-rate
+	 * base and re-applies base + trim on every rate change -- the same
+	 * arrangement as loop_delay. Writing this alone no longer pins the
+	 * register.
+	 */
+	if (val < -255 || val > 255)
+		return -ERANGE;
+	g_group_delay = (int)val;
+	g_group_delay_trim = (int)val;
+	ad7768_cola_group_delay_retrim();
+	printk(KERN_INFO "cola group_delay trim set to %d\n", g_group_delay_trim);
+	return len;
+}
 static ssize_t getCoupling(struct iio_dev *indio_dev, uintptr_t private, const struct iio_chan_spec *chan, char *buf) {
 	unsigned long val,len;
 	if (outcoupling) {
@@ -391,6 +656,8 @@ static ssize_t setCoupling(struct iio_dev *indio_dev, uintptr_t private, const s
 		printk(KERN_INFO "no coupling to write\n");
 	}
 	Set_iCurrentFilter(iFilterSelect);
+	/* the same bank picks the ch9 route delay -- see ad7768.c */
+	ad7768_set_dac_route(iFilterSelect);
 //	drive_offset = (float)GetDriveOffset();
 	GetDriveCounts(drive_counts);
 	
@@ -404,7 +671,73 @@ static ssize_t setCoupling(struct iio_dev *indio_dev, uintptr_t private, const s
 	return len;
 }
 
+/*
+ * DacStartGate explicit arm control, exposed to the client over libiio as
+ * out_voltage0_dacgate_arm. The gate itself lives in the PL; these helpers are
+ * exported by industrialio-buffer-dmaengine.c, which owns the ioremap.
+ *
+ * The gate arms itself on DAC buffer enable, so nothing normally needs to write
+ * this. It stays writable purely as a diagnostic: writing 0/1 drives the arm bit
+ * directly, which is useful for bench-testing the gate without a client.
+ *
+ * READING it is the useful part. started=1 with prefilled=1 means the run was
+ * held and released on the sync edge -- deterministic and cross-board aligned.
+ * started=1 with prefilled=0 means the data arrived after the trigger, so the
+ * DAC played immediately and that run is knowingly NOT aligned.
+ */
+extern void dacgate_set_arm(bool on);
+extern u32  dacgate_status(void);
+
+static ssize_t setDacgateArm(struct iio_dev *indio_dev, uintptr_t private,
+			     const struct iio_chan_spec *chan,
+			     const char *buf, size_t len)
+{
+	unsigned long val;
+
+	if (kstrtoul(buf, 10, &val))
+		return -EINVAL;
+
+	dacgate_set_arm(val != 0);
+	printk(KERN_INFO "dacgate: %s by direct write (status 0x%08x)\n",
+	       val ? "ARMED" : "disarmed", dacgate_status());
+	return len;
+}
+
+/*
+ * Status readback, so the client can confirm the gate is armed AND that the
+ * prefill actually completed before it fires the trigger. With the RTL no
+ * longer requiring prefill, prefilled=0 at release means sample 0 is timed by
+ * DMA response rather than by the sync edge -- i.e. that run is NOT
+ * cross-board aligned. This is the tripwire for that.
+ */
+static ssize_t getDacgateArm(struct iio_dev *indio_dev, uintptr_t private,
+			     const struct iio_chan_spec *chan, char *buf)
+{
+	u32 s = dacgate_status();
+
+	return sprintf(buf, "armed=%u prefilled=%u started=%u sync_count=%u\n",
+		       s & 1, (s >> 1) & 1, (s >> 2) & 1, (s >> 3) & 0xffff);
+}
+
 static const struct iio_chan_spec_ext_info ad5791_ext_info[] = {
+	{
+		.name = "cola_enabled",
+		.read = getColaEnabled,
+		.write = setColaEnabled,
+		.shared = IIO_SEPARATE,
+	},
+	{
+		.name = "loop_delay",
+		.read = getLoopDelay,
+		.write = setLoopDelay,
+		.shared = IIO_SEPARATE,
+	},
+	{
+		.name = "group_delay",
+		.read = getGroupDelay,
+		.write = setGroupDelay,
+		.shared = IIO_SEPARATE,
+	},
 	{
 		.name="coupling",
 		.read=getCoupling,
@@ -417,11 +750,29 @@ static const struct iio_chan_spec_ext_info ad5791_ext_info[] = {
 		.write=Set_iCurrentStep,
 		.shared=IIO_SEPARATE,
 	},
+/*{
+		.name="rampdown_rate",
+		.read=Get_RampdownRate,
+		.write=Set_RampdownRate,
+		.shared=IIO_SEPARATE,
+	},
+	{
+		.name="rampdown_now",
+		.read=iGet_Rampdown,
+		.write=iSet_Rampdown,
+		.shared=IIO_SEPARATE,
+	},*/
 	{
 		.name = "powerdown",
 		.shared = IIO_SHARED_BY_TYPE,
 		.read = ad5791_read_dac_powerdown,
 		.write = ad5791_write_dac_powerdown,
+	},
+	{
+		.name = "dacgate_arm",
+		.read = getDacgateArm,
+		.write = setDacgateArm,
+		.shared = IIO_SEPARATE,
 	},
 	IIO_ENUM("powerdown_mode", IIO_SHARED_BY_TYPE,
 		 &ad5791_powerdown_mode_enum),
@@ -437,6 +788,7 @@ static const struct iio_chan_spec_ext_info ad5791_ext_info[] = {
 	.channel = 0,					\
 	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW), 	\		
 	.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |	\
+		BIT(IIO_CHAN_INFO_PEAK) |		\
 		BIT(IIO_CHAN_INFO_OFFSET),		\
 	.scan_type = {					\
 		.sign = 's',				\
@@ -469,7 +821,7 @@ static int ad5791_write_raw(struct iio_dev *indio_dev,
 		if (iio_buffer_enabled(indio_dev))
 			return -EBUSY;
 		st->cached_val = val;
-//		printk(KERN_INFO "Write raw 0x%x\n",val);
+		printk(KERN_INFO "Write raw 0x%x\n",val);
 		val &= GENMASK(/*chan->scan_type.realbits - 1*/19, 0);
 		val <<= chan->scan_type.shift;
 //		printk(KERN_INFO "Write raw mod 0x%x\n",val);
@@ -477,6 +829,9 @@ static int ad5791_write_raw(struct iio_dev *indio_dev,
 		break;
 	case IIO_CHAN_INFO_OFFSET:
 		SetDriveOffset(val);	
+		break;
+	case IIO_CHAN_INFO_PEAK:
+		SetClipValue(val);	
 		break;
 	case IIO_CHAN_INFO_SCALE:
 		SetDriveScale(val);	
@@ -532,8 +887,26 @@ static int ad5791_buffer_postdisable(struct iio_dev *indio_dev)
 {
 	struct ad5791_state *st = iio_device_get_drvdata(indio_dev);
 
+	/* Read the current 20-bit DAC code from the streamToData HLS IP
+	 * AXI-Lite register. The IP writes DacCounts (clamped, 20-bit
+	 * 2's-complement) to this register on every sample, so it always
+	 * reflects the live DAC output value.
+	 */
+	{
+		void __iomem *reg = ioremap(0x400D0000 + 0x10, 4);
+		if (reg) {
+			u32 raw = readl(reg) & 0xfffff;
+			iounmap(reg);
+			/* Sign-extend from 20 bits to 32 bits */
+			st->rampdown_start_val = (u32)((s32)(raw << 12) >> 12);
+		} else {
+			st->rampdown_start_val = 0;
+		}
+	}
+
 	spi_engine_offload_enable(st->spi, false);
-//	printk(KERN_INFO "HW post disable\n");
+//	indio_dev->modes = INDIO_DIRECT_MODE;
+	printk(KERN_INFO "HW post disable\n");
 //	st->bus_locked = false;unsigned int num_bits;
 	return spi_bus_unlock(st->spi->master);
 }
@@ -598,6 +971,10 @@ static int ad5791_hardware_buffer_alloc(struct ad5791_state *st,struct iio_dev *
 	if (ret)
 		return ret;
 	iio_device_set_drvdata(indio_dev,st);
+	if (!g_ds_base)
+		g_ds_base = ioremap(DRIVESCALE_BASE_ADDR_AD5791, 0x10000);
+	if (g_ds_base)
+		iowrite32((u32)g_group_delay, g_ds_base + DRIVESCALE_GROUP_DELAY_OFFSET);
 	ret = devm_iio_device_register(&st->spi->dev, indio_dev);
 	return ret;
 } 
@@ -610,17 +987,17 @@ static const struct iio_info ad5791_info = {
 static int ad5791_probe(struct spi_device *spi)
 {
 	struct ad5791_platform_data *pdata = spi->dev.platform_data;
-	struct iio_dev *indio_dev;
+//	struct iio_dev *indio_dev;
 	struct ad5791_state *st;
 	char cplStr[20];
 	int ret, pos_voltage_uv = 0, neg_voltage_uv = 0,i=0;
 	u32 core, val;
 	struct device_node *np = spi->dev.of_node;
 	printk(KERN_INFO "ad5791 probe\n");
-	indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*st));
-	if (!indio_dev)
+	g_indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*st));
+	if (!g_indio_dev)
 		return -ENOMEM;
-	st = iio_priv(indio_dev);
+	st = iio_priv(g_indio_dev);
 	st->reg_vdd = devm_regulator_get(&spi->dev, "vdd");
 	if (!IS_ERR(st->reg_vdd)) {
 		ret = regulator_enable(st->reg_vdd);
@@ -684,22 +1061,22 @@ unsigned int num_bits;
 		AD5791_CTRL_OPGND | AD5791_CTRL_DACTRI);
 	if (ret)
 		goto error_disable_reg_neg;
-	//ret = ad5791_spi_write(st, AD5791_ADDR_DAC0, st->ctrl);
-	spi_set_drvdata(spi, indio_dev);
+	ret = ad5791_spi_write(st, AD5791_ADDR_DAC0, st->ctrl);
+	spi_set_drvdata(spi, g_indio_dev);
 
-	indio_dev->dev.parent = &spi->dev;
-	indio_dev->info = &ad5791_info;
-	indio_dev->modes = INDIO_DIRECT_MODE| INDIO_BUFFER_HARDWARE;
-	indio_dev->setup_ops = &ad5791_buffer_ops;
-	indio_dev->channels
+	g_indio_dev->dev.parent = &spi->dev;
+	g_indio_dev->info = &ad5791_info;
+	g_indio_dev->modes = INDIO_DIRECT_MODE| INDIO_BUFFER_HARDWARE;
+	g_indio_dev->setup_ops = &ad5791_buffer_ops;
+	g_indio_dev->channels
 		= &ad5791_channels[spi_get_device_id(spi)->driver_data];
 //	printk(KERN_INFO "dac device found %d\n",spi_get_device_id(spi)->driver_data);	
-	indio_dev->num_channels = 1;
-	indio_dev->name = spi_get_device_id(st->spi)->name;
-//	indio_dev->direction = DMA_MEM_TO_DEV;
-	st->num_bits = indio_dev->channels->scan_type.realbits;
+	g_indio_dev->num_channels = 1;
+	g_indio_dev->name = spi_get_device_id(st->spi)->name;
+//	g_indio_dev->direction = DMA_MEM_TO_DEV;
+	st->num_bits = g_indio_dev->channels->scan_type.realbits;
 	drive_shift_val = (1 << st->num_bits) - 1;
-	ret = ad5791_hardware_buffer_alloc(st,indio_dev);
+	ret = ad5791_hardware_buffer_alloc(st,g_indio_dev);
 		st->ctrl=0; //for now
 	ret = ad5791_spi_write(st, AD5791_ADDR_CTRL, st->ctrl);
 	if (ret) printk(KERN_INFO "error setting dac");

@@ -241,7 +241,7 @@ module_init(gfs_init);
 static void __exit gfs_exit(void)
 {
 	int i;
-
+	
 	ENTER();
 
 	if (gfs_registered)
@@ -267,6 +267,7 @@ static void *functionfs_acquire_dev(struct ffs_dev *dev)
 
 static void functionfs_release_dev(struct ffs_dev *dev)
 {
+	
 	module_put(THIS_MODULE);
 }
 
@@ -315,7 +316,7 @@ static int gfs_bind(struct usb_composite_dev *cdev)
 	struct net_device *net;
 #endif
 	int ret, i;
-
+	
 	ENTER();
 
 	if (missing_funcs)
@@ -444,7 +445,7 @@ error:
 static int gfs_unbind(struct usb_composite_dev *cdev)
 {
 	int i;
-
+	
 	ENTER();
 
 
@@ -481,7 +482,7 @@ static int gfs_do_config(struct usb_configuration *c)
 		container_of(c, struct gfs_configuration, c);
 	int i;
 	int ret;
-
+	
 	if (missing_funcs)
 		return -ENODEV;
 
@@ -537,7 +538,7 @@ error:
 static int eth_bind_config(struct usb_configuration *c)
 {
 	int status = 0;
-
+	
 	if (can_support_ecm(c->cdev->gadget)) {
 		f_ecm = usb_get_function(fi_ecm);
 		if (IS_ERR(f_ecm))
@@ -566,7 +567,7 @@ static int eth_bind_config(struct usb_configuration *c)
 static int bind_rndis_config(struct usb_configuration *c)
 {
 	int status = 0;
-
+	
 	f_rndis = usb_get_function(fi_rndis);
 	if (IS_ERR(f_rndis))
 		return PTR_ERR(f_rndis);

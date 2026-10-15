@@ -4,7 +4,7 @@
 		#address-cells = <0x1>;
 		#size-cells = <0x1>;
 		ranges;
-/*
+
 		i2c@41600000 {
 			compatible = "xlnx,axi-iic-1.01.b", "xlnx,xps-iic-2.00.a";
 			reg = <0x41600000 0x10000>;
@@ -57,7 +57,7 @@
 				#sound-dai-cells = <0>;
 			};
 		};
-*/
+
 		i2c@41620000 {
 			compatible = "xlnx,axi-iic-1.01.b", "xlnx,xps-iic-2.00.a";
 			reg = <0x41620000 0x10000>;
@@ -70,12 +70,13 @@
 			#address-cells = <1>;
 
 			eeprom1: eeprom@50 {
-				compatible = "at24,24c02";
+				compatible = "atmel,24c02";
 				reg = <0x50>;
+				pagesize = <8>;
 			};
 
 		};
-/*
+
 		hdmi_dma: dma@43000000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x43000000 0x1000>;
@@ -140,13 +141,13 @@
 
 			#sound-dai-cells = <0>;
 		};
-*/
+
 		axi_sysid_0: axi-sysid-0@45000000 {
 			compatible = "adi,axi-sysid-1.00.a";
 			reg = <0x45000000 0x10000>;
 		};
 	};
-/*
+
 	audio_clock: audio_clock {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
@@ -201,7 +202,7 @@
 			};
 		};
 	};
-*/
+
 	leds {
 		compatible = "gpio-leds";
 		ld0 {

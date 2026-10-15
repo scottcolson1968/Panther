@@ -250,7 +250,7 @@ MODULE_PARM_DESC(use_eem, "use CDC EEM mode");
 static int eth_do_config(struct usb_configuration *c)
 {
 	int status = 0;
-
+	
 	/* FIXME alloc iConfiguration string, set it in c->strings */
 
 	if (gadget_is_otg(c->cdev->gadget)) {
@@ -309,7 +309,7 @@ static int eth_bind(struct usb_composite_dev *cdev)
 	struct f_gether_opts	*geth_opts = NULL;
 	struct net_device	*net;
 	int			status;
-
+	
 	/* set up main config label and device descriptor */
 	if (use_eem) {
 		/* EEM */
@@ -448,6 +448,7 @@ fail:
 
 static int eth_unbind(struct usb_composite_dev *cdev)
 {
+	
 	if (has_rndis()) {
 		usb_put_function(f_rndis);
 		usb_put_function_instance(fi_rndis);

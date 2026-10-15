@@ -1086,6 +1086,16 @@ static struct platform_driver axi_dmac_driver = {
 	.probe = axi_dmac_probe,
 	.remove = axi_dmac_remove,
 };
+
+/* Return the bus address the DMAC is currently reading from.
+ * Call before dmaengine_terminate_sync() to capture the live position.
+ */
+u32 axi_dmac_current_src_addr(struct dma_chan *c)
+{
+	struct axi_dmac *dmac = chan_to_axi_dmac(to_axi_dmac_chan(c));
+	return (u32)axi_dmac_read(dmac, AXI_DMAC_REG_CURRENT_SRC_ADDR);
+}
+EXPORT_SYMBOL_GPL(axi_dmac_current_src_addr);
 module_platform_driver(axi_dmac_driver);
 
 MODULE_AUTHOR("Lars-Peter Clausen <lars@metafoo.de>");

@@ -22,6 +22,12 @@
 // 0x58 : Data signal of iCurrentFilter
 //        bit 31~0 - iCurrentFilter[31:0] (Read/Write)
 // 0x5c : reserved
+// 0x60 : Data signal of fClipValue
+//        bit 31~0 - fClipValue[31:0] (Read/Write)
+// 0x64 : reserved 
+// 0x68 : Data signal of fRampVal
+//        bit 31~0 - fRampVal[31:0] (Read/Write)
+// 0x6c : reserved
 // 0x20 ~
 // 0x2f : Memory 'calibratedStep' (4 * 32b)
 //        Word n : bit [31:0] - calibratedStep[n]
@@ -41,6 +47,10 @@
 #define XDRIVESCALE_CONTROL_BITS_SAMP_INDEX_DATA       32
 #define XDRIVESCALE_CONTROL_ADDR_ICURRENTFILTER_DATA   0x58
 #define XDRIVESCALE_CONTROL_BITS_ICURRENTFILTER_DATA   32
+#define XDRIVESCALE_CONTROL_ADDR_FCLIPVALUE_DATA       0x60 
+#define XDRIVESCALE_CONTROL_BITS_FCLIPVALUE_DATA       32
+#define XDRIVESCALE_CONTROL_ADDR_BRAMPDOWN_DATA         0x68
+#define XDRIVESCALE_CONTROL_BITS_BRAMPDOWNL_DATA         1
 #define XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_BASE   0x20
 #define XDRIVESCALE_CONTROL_ADDR_CALIBRATEDSTEP_HIGH   0x2f
 #define XDRIVESCALE_CONTROL_WIDTH_CALIBRATEDSTEP       32

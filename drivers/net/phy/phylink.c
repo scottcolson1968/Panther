@@ -22,7 +22,7 @@
 
 #include "sfp.h"
 #include "swphy.h"
-
+extern void SetRampDown(void);
 #define SUPPORTED_INTERFACES \
 	(SUPPORTED_TP | SUPPORTED_MII | SUPPORTED_FIBRE | \
 	 SUPPORTED_BNC | SUPPORTED_AUI | SUPPORTED_Backplane)
@@ -1235,12 +1235,12 @@ static void phylink_link_up(struct phylink *pl,
 		     phy_speed_to_str(link_state.speed),
 		     phy_duplex_to_str(link_state.duplex),
 		     phylink_pause_to_str(link_state.pause));
+	
 }
 
 static void phylink_link_down(struct phylink *pl)
 {
 	struct net_device *ndev = pl->netdev;
-
 	if (ndev)
 		netif_carrier_off(ndev);
 	pl->mac_ops->mac_link_down(pl->config, pl->cur_link_an_mode,
@@ -1569,8 +1569,13 @@ static void phylink_phy_change(struct phy_device *phydev, bool up)
 	if (rx_pause)
 		pl->phy_state.pause |= MLO_PAUSE_RX;
 	pl->phy_state.interface = phydev->interface;
-	pl->phy_state.link = up;
-	mutex_unlock(&pl->state_mutex);
+	{
+		bool was_up = pl->phy_state.link;
+		pl->phy_state.link = up;
+		mutex_unlock(&pl->state_mutex);
+		if (!up && was_up)
+			SetRampDown();
+	}
 
 	phylink_run_resolve(pl);
 

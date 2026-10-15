@@ -320,46 +320,7 @@ static int ad5446_buffer_postdisable(struct iio_dev *indio_dev)
 	st->bus_locked = false;
 	return spi_bus_unlock(st->spi->master);
 }
-#if 0
-extern bool bWaitForADCTrigger;
-extern bool setTriggerBlock;
-extern bool doSync;
-bool bThrowOutOne=true;
-struct iio_dma_buffer_queue *g_cola_queue=NULL;
-struct iio_dma_buffer_block *g_cola_block=NULL;
 
-// done in dmaengine now
-static int hw_submit_block(struct iio_dma_buffer_queue *queue,
-			   struct iio_dma_buffer_block *block)
-{
-//	block->block.bytes_used = block->block.size;
-//	printk(KERN_INFO "HW submit block 0x%x size:%d\n",block->phys_addr,block->block.bytes_used );
-/*	if (bWaitForADCTrigger && bThrowOutOne)		{
-		bThrowOutOne=false;
-		return 0;//udelay(1);	
-	}*/
-	int retVal;
-//	printk(KERN_INFO "cola queue 0x%x",queue);
-	
-	if (doSync)	 {
-		g_cola_queue=queue;
-		g_cola_block=block;
-		retVal=0;
-	}
-	else {
-		printk(KERN_INFO "cola submit");
-		while (bWaitForADCTrigger)		
-			udelay(1);	
-		retVal = iio_dmaengine_buffer_submit_block(queue, block);
-	}
-	return retVal;
-}
-
-static const struct iio_dma_buffer_ops dma_buffer_ops = {
-	.submit = hw_submit_block,
-	.abort = iio_dmaengine_buffer_abort,
-};
-#endif
 static const struct iio_buffer_setup_ops ad5446_buffer_ops = {
 	.postenable = &ad5446_buffer_postenable,
 	.postdisable = &ad5446_buffer_postdisable,
