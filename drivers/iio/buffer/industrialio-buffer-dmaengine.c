@@ -1091,7 +1091,16 @@ MODULE_PARM_DESC(dac_flush_on_stop,
 
 static u32 *g_dac_flush_vaddr;
 static dma_addr_t g_dac_flush_phys;
-static bool g_dac_flush_pending;
+/*
+ * The DAC buffer whose stop owes a flush. A pointer, not a flag: the DAC and
+ * cola buffers are often disabled at the same moment (two writers closing
+ * together), and abort runs for every OUT buffer. With a global bool, cola's
+ * abort could take the flush and play the zeros on the cola channel (which
+ * then timed out and left cola shifted), and cola's disable could clear it
+ * before the DAC's abort ran (the DAC skipped its flush silently, leaving a
+ * stale ch9 delay line). Found by the regression suite, 2026-10-15.
+ */
+static struct dmaengine_buffer *g_dac_flush_owner;
 
 static void iio_dmaengine_dac_flush_done(void *arg)
 {
@@ -1195,11 +1204,12 @@ void iio_dmaengine_buffer_abort(struct iio_dma_buffer_queue *queue)
 	iio_dma_buffer_block_list_abort(queue, &dmaengine_buffer->active);
 
 	/* Main-DAC buffer disable only: see iio_dmaengine_dac_flush() */
-	if (g_dac_flush_pending &&
-		queue->buffer.direction == IIO_BUFFER_DIRECTION_OUT) {
-		g_dac_flush_pending = false;
+	if (queue->buffer.direction == IIO_BUFFER_DIRECTION_OUT &&
+	    cmpxchg(&g_dac_flush_owner, dmaengine_buffer, NULL) == dmaengine_buffer)
 		iio_dmaengine_dac_flush(dmaengine_buffer);
-	}
+	else if (queue->buffer.direction == IIO_BUFFER_DIRECTION_OUT &&
+		 READ_ONCE(g_dac_flush_owner))
+		printk(KERN_INFO "dac flush: pending during another OUT buffer's abort - left for the DAC\n");
 }
 EXPORT_SYMBOL_GPL(iio_dmaengine_buffer_abort);
 
@@ -1343,8 +1353,9 @@ static int iio_dmaengine_buffer_disable(struct iio_buffer *buffer,
 	 * (status bit 2 = started). An armed gate that never released has
 	 * dma_enable low, so a flush could never complete.
 	 */
-	if (is_dac && dac_flush_on_stop)
-		g_dac_flush_pending = !dac_gate_mode || (dacgate_status() & 0x4);
+	if (is_dac && dac_flush_on_stop &&
+	    (!dac_gate_mode || (dacgate_status() & 0x4)))
+		WRITE_ONCE(g_dac_flush_owner, iio_buffer_to_dmaengine_buffer(buffer));
 	/* End-of-run signal: clear g_acquiring when the input (RX/ADC) buffer is
 	 * disabled. Next sync IRQ after the next buffer enable starts a new run.
 	 * Mirror the off state to the FPGA Synch IP's bRunningAcq register. */
@@ -1354,7 +1365,9 @@ static int iio_dmaengine_buffer_disable(struct iio_buffer *buffer,
 			XSynch_Set_bRunningAcq(g_pSynch, 0);
 	}
 	ret = iio_dma_buffer_disable(buffer, indio_dev);
-	g_dac_flush_pending = false;
+	/* only ever clear our own claim; cola must not cancel the DAC's */
+	if (is_dac)
+		cmpxchg(&g_dac_flush_owner, iio_buffer_to_dmaengine_buffer(buffer), NULL);
 	/* Disarm last, so the flush ran with the gate open. IDLE then drains
 	 * fifo_generator_1 -- zeros, if we flushed -- out to the DAC. */
 	if (is_dac)
