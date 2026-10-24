@@ -228,8 +228,14 @@ static irqreturn_t sync_buf(int irq, void *dev_id,struct pt_regs *regs) {
 		       var, dac_gate_mode ? ", gate mode: sentinel armed" : "",
 		       sync_origin());
 	} else {
-		printk(KERN_INFO "sync interrupt! %d (spurious — ignored) [%s]\n",
-		       var, sync_origin());
+		/*
+		 * Rate-limited: a noisy SYNC_IN/ line once fired this ~900 times
+		 * a second and filled the SD card through rsyslog (v30.19). The
+		 * count N is the running IRQ total, so the gaps stay visible and
+		 * /proc/interrupts (sync_buf) still has the exact figure.
+		 */
+		printk_ratelimited(KERN_INFO "sync interrupt! %d (spurious — ignored) [%s]\n",
+				   var, sync_origin());
 	}
 	if (st)
 		g_sampling_freq = st->sampling_freq;
@@ -255,7 +261,30 @@ static struct ad7768_state *ad7768_get_data(struct iio_dev *indio_dev)
 }
 
 char in_buf[80];
+/*
+ * One TEDS read at a time: each read flips the channel's coupling GPIOs and
+ * drives the single shared 1-Wire master, and w1_timeout is global. Two
+ * readers (iio_info -u local: while a client is connected) used to interleave.
+ */
+static DEFINE_MUTEX(teds_lock);
+static ssize_t getTedsId_locked(const struct iio_chan_spec *chan, char *TedsData);
+
 static ssize_t getTedsId(struct iio_dev *indio_dev, uintptr_t private, const struct iio_chan_spec *chan, char *TedsData) {
+	ssize_t ret;
+
+	/* bound check BEFORE indexing: in_voltage8 has this attribute too */
+	if (chan->channel < 0 || chan->channel >= ARRAY_SIZE(incoupling) ||
+	    !incoupling[chan->channel]) {
+		sprintf(TedsData,"no coupling for teds chan %d",chan->channel);
+		return 0; // for testing
+	}
+	mutex_lock(&teds_lock);
+	ret = getTedsId_locked(chan, TedsData);
+	mutex_unlock(&teds_lock);
+	return ret;
+}
+
+static ssize_t getTedsId_locked(const struct iio_chan_spec *chan, char *TedsData) {
 
 	struct file *fp;
 	char filename[80],IDNum[80];
@@ -264,12 +293,8 @@ static ssize_t getTedsId(struct iio_dev *indio_dev, uintptr_t private, const str
 	size_t size=4;
 	size_t count=64;
 	int ret,i,tries=0,tedsok=0;
-	
+
 	unsigned long currentgain, tedsbit=6; // teds and single ended enabled
-	if (!incoupling[chan->channel] || chan->channel>7) {
-		sprintf(TedsData,"no coupling for teds chan %d",chan->channel);
-		return 0; // for testing
-	}
 	w1_timeout=0;
 //	 printk (KERN_INFO "read in coupling chan %d\n",chan->channel);
        
@@ -283,16 +308,17 @@ static ssize_t getTedsId(struct iio_dev *indio_dev, uintptr_t private, const str
         
 	sprintf(filename, "/sys/bus/w1/devices/w1_bus_master1/w1_master_search");
         fp = filp_open(filename,O_RDWR,0);
-        if (fp==NULL)
-                printk(KERN_INFO "filp_open error %s\n",filename);
+        /* filp_open returns ERR_PTR, never NULL: kernel_write on it Oopsed */
+        if (IS_ERR(fp))
+                printk(KERN_INFO "filp_open error %s (%ld)\n",filename,PTR_ERR(fp));
         else {
                 pos=0;
 		i=1;
 		IDNum[0]='1';
 		kernel_write(fp,IDNum,i,&pos);
                 printk(KERN_INFO "kernel write %d",i);
+                filp_close(fp,NULL);
         }
-        filp_close(fp,NULL);
 
 	sprintf(filename, "/sys/bus/w1/devices/w1_bus_master1/w1_master_slaves");
 	msleep(100);
@@ -303,16 +329,13 @@ static ssize_t getTedsId(struct iio_dev *indio_dev, uintptr_t private, const str
 	for (ret=0;ret<80;ret++)
 		IDNum[ret]='\0';
 	if (IS_ERR(fp)) {
-                printk(KERN_INFO "filp id error %s\n",filename);
-//		gpiod_set_array_value_cansleep(incoupling[chan]->ndescs,incoupling[chan]->desc, incoupling[chan]->info, (unsigned long *)&currentgain); // reset gain value
-         //       return 0;
+                printk(KERN_INFO "filp id error %s (%ld)\n",filename,PTR_ERR(fp));
+		/* previously fell through to kernel_read/filp_close on the ERR_PTR */
+		msleep(100);
+		continue;
         }
 
-	if (fp==NULL) {
-                printk(KERN_INFO "filp_open error %s\n",filename);
-		ret=0;
-	}
-        else {
+	{
                 pos=0;
 		ret = kernel_read(fp, (void *)IDNum, 16, &pos);
 		if(ret<15) {
@@ -371,11 +394,13 @@ static ssize_t getTedsId(struct iio_dev *indio_dev, uintptr_t private, const str
          fp = filp_open(filename,O_WRONLY,0);
         if (IS_ERR(fp)) {
                 printk(KERN_INFO "filp delete error %s\n",filename);
-                return 0;
+                w1_timeout=3600000;
+                return ret; // the TEDS data itself was read fine
         }
 	pos=0;
 //	w1_timeout=1;
 	 kernel_write(fp, (void *)IDNum,15,&pos);
+	filp_close(fp,NULL); // was never closed: one leaked file per TEDS read
 	printk(KERN_INFO "remove IDNum %s from %s gain %d",IDNum,filename,currentgain);
 	w1_timeout=3600000;
 //	printk(KERN_INFO "user mode ret:%d %s\n",ret,argv);
