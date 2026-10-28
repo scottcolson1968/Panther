@@ -26,6 +26,28 @@ extern struct gpio_descs *synchgpio;
 XSynch *g_pSynch;
 EXPORT_SYMBOL(g_pSynch);
 
+/*
+ * Spurious-sync record (v30.20), filled in by sync_buf() in ad7768.c and read
+ * by the client through the SYNC attributes below. bSpuriousSynch (the Synch
+ * IP latch) only says that at least one sync edge arrived during the run;
+ * these say how many, from which block on the data is suspect, and whether
+ * this unit or another box on the sync line produced the edge. A spurious
+ * edge also resets the AD7768 filter, so data around it is not trustworthy.
+ *
+ *   spurious_count        edges during the current run (cleared at its start)
+ *   spurious_first_block  run block number at the first of them, -1 = none
+ *   spurious_total        edges during any run since boot
+ *   spurious_origin       SELF / EXTERNAL of the most recent, "none" if never
+ */
+unsigned int g_spurious_run;
+int g_spurious_first_block = -1;
+unsigned int g_spurious_total;
+const char *g_spurious_origin = "none";
+EXPORT_SYMBOL(g_spurious_run);
+EXPORT_SYMBOL(g_spurious_first_block);
+EXPORT_SYMBOL(g_spurious_total);
+EXPORT_SYMBOL(g_spurious_origin);
+
 static ssize_t rebootNow(struct iio_dev *indio_dev, uintptr_t private,
 			 const struct iio_chan_spec *chan,
 			 const char *buf, size_t len)
@@ -78,6 +100,30 @@ static ssize_t set_bSpuriousSynch(struct iio_dev *indio_dev, uintptr_t private,
 	return len;
 }
 
+static int get_spurious_count(struct iio_dev *indio_dev, uintptr_t private,
+			      const struct iio_chan_spec *chan, char *buf)
+{
+	return sprintf(buf, "%u\n", READ_ONCE(g_spurious_run));
+}
+
+static int get_spurious_first_block(struct iio_dev *indio_dev, uintptr_t private,
+				    const struct iio_chan_spec *chan, char *buf)
+{
+	return sprintf(buf, "%d\n", READ_ONCE(g_spurious_first_block));
+}
+
+static int get_spurious_total(struct iio_dev *indio_dev, uintptr_t private,
+			      const struct iio_chan_spec *chan, char *buf)
+{
+	return sprintf(buf, "%u\n", READ_ONCE(g_spurious_total));
+}
+
+static int get_spurious_origin(struct iio_dev *indio_dev, uintptr_t private,
+			       const struct iio_chan_spec *chan, char *buf)
+{
+	return sprintf(buf, "%s\n", READ_ONCE(g_spurious_origin));
+}
+
 static struct iio_chan_spec_ext_info sync_ext_info[] = {
 	{
 		.name   = "reboot",
@@ -96,6 +142,10 @@ static struct iio_chan_spec_ext_info sync_ext_info[] = {
 		.write  = set_bSpuriousSynch,
 		.shared = IIO_SHARED_BY_ALL,
 	},
+	{ .name = "spurious_count",       .read = get_spurious_count,       .shared = IIO_SHARED_BY_ALL },
+	{ .name = "spurious_first_block", .read = get_spurious_first_block, .shared = IIO_SHARED_BY_ALL },
+	{ .name = "spurious_total",       .read = get_spurious_total,       .shared = IIO_SHARED_BY_ALL },
+	{ .name = "spurious_origin",      .read = get_spurious_origin,      .shared = IIO_SHARED_BY_ALL },
 	{ }
 };
 

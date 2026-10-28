@@ -156,6 +156,11 @@ extern unsigned int g_blockCount;
 extern unsigned int g_sampling_freq;
 extern bool g_acquiring;
 extern XSynch *g_pSynch;
+/* Spurious-sync record, defined and exposed by synch.c (SYNC device). */
+extern unsigned int g_spurious_run;
+extern int g_spurious_first_block;
+extern unsigned int g_spurious_total;
+extern const char *g_spurious_origin;
 /*
  * Both defined in drivers/iio/buffer/industrialio-buffer-dmaengine.c. See the
  * dac_gate_mode comment there for why the ADC sentinel stamp has to follow how
@@ -207,6 +212,8 @@ static irqreturn_t sync_buf(int irq, void *dev_id,struct pt_regs *regs) {
 	if (!g_acquiring) {
 		g_acquiring = true;
 		g_blockCount = 0;
+		WRITE_ONCE(g_spurious_run, 0);
+		WRITE_ONCE(g_spurious_first_block, -1);
 		/* Mirror to FPGA Synch IP bRunningAcq register so userspace +
 		 * HLS can observe the acquisition-active state. */
 		if (g_pSynch)
@@ -228,6 +235,14 @@ static irqreturn_t sync_buf(int irq, void *dev_id,struct pt_regs *regs) {
 		       var, dac_gate_mode ? ", gate mode: sentinel armed" : "",
 		       sync_origin());
 	} else {
+		const char *origin = sync_origin();
+
+		/* Record it for the client (SYNC spurious_* attributes, synch.c). */
+		if (!g_spurious_run)
+			WRITE_ONCE(g_spurious_first_block, (int)g_blockCount);
+		WRITE_ONCE(g_spurious_run, g_spurious_run + 1);
+		WRITE_ONCE(g_spurious_total, g_spurious_total + 1);
+		WRITE_ONCE(g_spurious_origin, origin);
 		/*
 		 * Rate-limited: a noisy SYNC_IN/ line once fired this ~900 times
 		 * a second and filled the SD card through rsyslog (v30.19). The
@@ -235,7 +250,7 @@ static irqreturn_t sync_buf(int irq, void *dev_id,struct pt_regs *regs) {
 		 * /proc/interrupts (sync_buf) still has the exact figure.
 		 */
 		printk_ratelimited(KERN_INFO "sync interrupt! %d (spurious — ignored) [%s]\n",
-				   var, sync_origin());
+				   var, origin);
 	}
 	if (st)
 		g_sampling_freq = st->sampling_freq;
@@ -751,8 +766,18 @@ static int s_loop_adc_filter = -1;      /* 0 = WIDEBAND, 1 = SINC5 */
  * doing so: the cola read index subtracts s_align_ofs, so priming the
  * handshake mid-stream shifts the very thing being measured.
  */
+/*
+ * 2026-10-28, for the cola FIFO drain + prefill bitstream: until then cola
+ * started late by however many stale words the previous run left in the cola
+ * FIFO, so the old values were medians over a moving target. With the fix the
+ * offset repeats exactly, except that DriveScale latches alignOffset once per
+ * boot (17 or 18), which moves every rate by one sample for the whole boot.
+ * Centred on the common boot (18): shifted +2 at 262144/131072/32768 and +1
+ * at 65536 and below (old: -307 -307 -306 -306 -305 -305 -323 -316 -306).
+ * Measured with /root/colaalign_route4k.sh (-b 4096; -b 1024 underruns).
+ */
 static const int ad7768_cola_group_delay[9] = {
-	-307, -307, -306, -306, -305, -305, -323, -316, -306
+	-306, -306, -305, -305, -304, -303, -322, -314, -304
 };
 
 int g_group_delay_trim;	/* client trim, written from ad5791.c */
@@ -760,16 +785,39 @@ EXPORT_SYMBOL_GPL(g_group_delay_trim);
 
 extern void Set_group_delay(int val);
 
+static int ad7768_cola_route_delay(void);
+
+/*
+ * How far below its table value the cola group_delay can go before the read
+ * index wraps the 256-entry cola ring (cola then lands ~254 samples late).
+ * 65536: wraps at -325 on an alignOffset-18 boot and -324 on a 17 boot, so
+ * with the table at -322 the floor of table - 1 = -323 is safe on both.
+ * Older measurement (2026-10-28, previous table -323): wrapped at table - 2; 32768 >= 2, 131072 >= 8, 262144 >= 12 were tested
+ * clean. 65536 is the only path where the route correction (-2 on the 10 kHz
+ * route) or a client trim can reach the edge, so only it is limited here.
+ */
+static const int ad7768_cola_gd_headroom[9] = {
+	1000, 1000, 1000, 1000, 1000, 1000, 1, 1000, 1000
+};
+
 static void ad7768_apply_cola_group_delay(void)
 {
-	int gd;
+	int gd, route, floor;
 
 	if (s_loop_samp_index < 0 || s_loop_samp_index > 8)
 		return;
-	gd = ad7768_cola_group_delay[s_loop_samp_index] + g_group_delay_trim;
+	route = ad7768_cola_route_delay();
+	gd = ad7768_cola_group_delay[s_loop_samp_index] + route + g_group_delay_trim;
+	floor = ad7768_cola_group_delay[s_loop_samp_index] -
+		ad7768_cola_gd_headroom[s_loop_samp_index];
+	if (gd < floor) {
+		printk(KERN_WARNING "cola group_delay %d would wrap the cola ring at path %d, clamped to %d\n",
+			   gd, s_loop_samp_index, floor);
+		gd = floor;
+	}
 	Set_group_delay(gd);
-	printk(KERN_INFO "cola group_delay %d (path %d, trim %d)\n",
-		   gd, s_loop_samp_index, g_group_delay_trim);
+	printk(KERN_INFO "cola group_delay %d (path %d, route %+d, trim %d)\n",
+		   gd, s_loop_samp_index, route, g_group_delay_trim);
 }
 
 void ad7768_cola_group_delay_retrim(void)
@@ -803,6 +851,36 @@ static int ad7768_route_delay(void)
 	if (!base)
 		return 0;
 	/* base is quoted at samp_index 8; halve per step down, rounded */
+	num = base << s_loop_samp_index;
+	return num >= 0 ? (num + 128) / 256 : -(((-num) + 128) / 256);
+}
+
+/*
+ * Cola group_delay correction for DAC routes other than the one the cola
+ * table was calibrated on (coupling 46). It is NOT the negative of the
+ * loop_delay route term: the route setting moves the cola output too, by a
+ * different amount on the 10 kHz route (measured: DAC +9, cola +15 there).
+ * Values are group_delay units at 262144 (+ = cola later), measured
+ * 2026-10-28 with /root/colaalign_route.sh, 11 runs per route, cola - DAC
+ * relative to the 40 kHz route: 1.2 kHz -156, 10 kHz +5.8, CAL +6.6.
+ * A fixed time, so scaled with the rate like ad7768_route_delay();
+ * confirmed at 32768 (-18.75 / +1.25 / +1 measured).
+ * Bank 0 deliberately uses the 10 kHz value (-6), not its measured -156:
+ * the 1.2 kHz filter is reported broken, so that number is not trusted.
+ * Pending a measurement on a production unit.
+ */
+static const int ad7768_cola_route_delay_262144[4] = { -6, -6, 0, -7 };
+
+static int ad7768_cola_route_delay(void)
+{
+	int base, num;
+
+	if (s_dac_route_bank < 0 || s_dac_route_bank > 3 ||
+	    s_loop_samp_index < 0 || s_loop_samp_index > 8)
+		return 0;
+	base = ad7768_cola_route_delay_262144[s_dac_route_bank];
+	if (!base)
+		return 0;
 	num = base << s_loop_samp_index;
 	return num >= 0 ? (num + 128) / 256 : -(((-num) + 128) / 256);
 }
