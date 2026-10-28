@@ -871,18 +871,33 @@ static int ad7768_route_delay(void)
  */
 static const int ad7768_cola_route_delay_262144[4] = { -6, -6, 0, -7 };
 
+/*
+ * Extra whole-sample correction at 262144 only (samp_index 8), on top of the
+ * scaled value above. The table above was measured with a step (50% point).
+ * On the 10 kHz route the filter's ringing pulls that point, and a sine
+ * shows cola a steady 1.0 sample early from 200 Hz to 4 kHz (-0.4 at 8 kHz)
+ * while the step reads 0 (2026-10-28, colasine.sh). The client measures with
+ * a sine, and a sine is what cola actually plays, so 262144 is aligned to
+ * it. At 131072 and below the difference is under 0.3 samples (measured), so
+ * nothing is added there; changing the -6 above instead would also have
+ * moved 65536, which is already right. Bank 0 copies bank 1 like the table
+ * above. 40 kHz (sine -0.3..-0.1) and CAL are left alone.
+ */
+static const int ad7768_cola_route_fine_262144[4] = { 1, 1, 0, 0 };
+
 static int ad7768_cola_route_delay(void)
 {
-	int base, num;
+	int base, num, d;
 
 	if (s_dac_route_bank < 0 || s_dac_route_bank > 3 ||
 	    s_loop_samp_index < 0 || s_loop_samp_index > 8)
 		return 0;
 	base = ad7768_cola_route_delay_262144[s_dac_route_bank];
-	if (!base)
-		return 0;
 	num = base << s_loop_samp_index;
-	return num >= 0 ? (num + 128) / 256 : -(((-num) + 128) / 256);
+	d = num >= 0 ? (num + 128) / 256 : -(((-num) + 128) / 256);
+	if (s_loop_samp_index == 8)
+		d += ad7768_cola_route_fine_262144[s_dac_route_bank];
+	return d;
 }
 
 void ad7768_set_dac_route(int bank)
